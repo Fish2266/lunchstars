@@ -32,6 +32,7 @@ export function createDebugPanel(actions: { shoveDummy: () => void; reset: () =>
   bal.add(tuning, 'balanceKd', 0, 200, 1).name('upright damping');
   bal.add(tuning, 'limbKp', 0, 1000, 5).name('limb stiffness');
   bal.add(tuning, 'limbKd', 0, 100, 1).name('limb damping');
+  bal.add(tuning, 'aimGain', 0.5, 6, 0.1).name('aim arm gain');
   bal.add(tuning, 'maxAngAccel', 50, 3000, 10).name('max ang accel');
   bal.add(tuning, 'standHeight', 0.7, 1.3, 0.01).name('stand height');
   bal.add(tuning, 'hoverKp', 0, 400, 1).name('hover stiffness');

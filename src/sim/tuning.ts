@@ -6,7 +6,9 @@ export const tuning = {
   balanceKd: 40,
   // Limb pose controllers (legs walking, arms reaching).
   limbKp: 220,
-  limbKd: 18,
+  limbKd: 28,
+  // Multiplier on limb gains for arms that are aiming or reaching.
+  aimGain: 2.5,
   // Cap on controller angular acceleration, prevents explosions when far from the target.
   maxAngAccel: 900,
 

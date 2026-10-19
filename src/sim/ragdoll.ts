@@ -58,8 +58,8 @@ const HAND_LOCAL = { x: 0, y: -0.16, z: 0 };
 interface Part {
   def: PartDef;
   body: Body;
-  /** Scalar inertia used to turn desired angular acceleration into torque. */
-  inertia: number;
+  /** Principal inertia (body-local axes) used to turn desired angular acceleration into torque. */
+  inertia: { x: number; y: number; z: number };
   /** Per-part gain multiplier (balance parts vs limbs). */
   balance: boolean;
 }
@@ -92,7 +92,9 @@ export class Ragdoll {
   private walkPhase = 0;
   private walkAmount = 0;
   private jumpCooldown = 0;
-  private yaw = 0;
+  yaw = 0;
+  /** Set by the sim each tick: how many arms point along the aim (0 = none, 1 = right, 2 = both). */
+  aimHands: 0 | 1 | 2 = 0;
   private dt = 1 / 60;
 
   constructor(
@@ -122,7 +124,7 @@ export class Ragdoll {
       const part: Part = {
         def,
         body,
-        inertia: (pi.x + pi.y + pi.z) / 3,
+        inertia: { x: pi.x, y: pi.y, z: pi.z },
         balance: def.name === 'pelvis' || def.name === 'chest' || def.name === 'head',
       };
       this.parts.set(def.name, part);
@@ -169,7 +171,11 @@ export class Ragdoll {
   /** Knock the character around. Impulse is world-space; `strength` is the weapon's knockback number, which sets the stun. */
   hit(body: Body, impulse: { x: number; y: number; z: number }, point: { x: number; y: number; z: number }, strength: number) {
     body.applyImpulseAtPoint(impulse, point, true);
-    this.stunTimer = Math.min(4, this.stunTimer + strength * tuning.stunPerImpulse);
+    this.addStun(strength * tuning.stunPerImpulse);
+  }
+
+  addStun(seconds: number) {
+    this.stunTimer = Math.min(4, this.stunTimer + seconds);
   }
 
   teleport(pos: { x: number; y: number; z: number }) {
@@ -182,6 +188,17 @@ export class Ragdoll {
     }
     this.stunTimer = 0;
     this.yaw = 0;
+  }
+
+  /** World position of the right hand (where guns are held). */
+  rightHand() {
+    return localToWorld(this.parts.get('forearmR')!.body, HAND_LOCAL);
+  }
+
+  /** Point the camera and the sim agree shots come from: above the chest. */
+  aimOrigin() {
+    const c = this.chest.translation();
+    return { x: c.x, y: c.y + 0.35, z: c.z };
   }
 
   releaseAll() {
@@ -289,14 +306,33 @@ export class Ragdoll {
     this.driveLeg('thighL', 'shinL', swing, kneeL, velFwd, velSide, airTuck, k);
     this.driveLeg('thighR', 'shinR', -swing, kneeR, velFwd, velSide, airTuck, k);
 
-    if (input.grab) {
+    const aimQ = mul(_qYaw, rot(X_AXIS, -(Math.PI / 2 + clamp(input.aimPitch, -1.2, 1.4))));
+    if (this.aimHands > 0 && !input.grab) {
+      // Point the gun arm(s) straight down the aim line; the free arm swings as usual.
+      const ka = k * t.aimGain;
+      this.drive('upperArmR', mul(aimQ, rot(Z_AXIS, this.aimHands === 2 ? 0.25 : 0)), ka);
+      this.drive('forearmR', aimQ, ka);
+      this.holdUp('upperArmR', k);
+      this.holdUp('forearmR', k);
+      if (this.aimHands === 2) {
+        this.drive('upperArmL', mul(aimQ, rot(Z_AXIS, -0.45)), ka);
+        this.drive('forearmL', mul(aimQ, rot(Y_AXIS, -0.5)), ka);
+        this.holdUp('upperArmL', k);
+        this.holdUp('forearmL', k);
+      } else {
+        const arm = t.armSwing * w * Math.sin(this.walkPhase) * velFwd;
+        this.drive('upperArmL', mul(_qYaw, mul(rot(X_AXIS, arm), rot(Z_AXIS, 0.15))), k * 0.6);
+        this.drive('forearmL', mul(_qYaw, rot(X_AXIS, arm - 0.35)), k * 0.6);
+      }
+    } else if (input.grab) {
       // Reach forward along the aim pitch.
-      const reach = -(Math.PI / 2 + clamp(input.aimPitch, -1.2, 1.4));
-      const armQ = mul(_qYaw, rot(X_AXIS, reach));
-      this.drive('upperArmL', mul(armQ, rot(Z_AXIS, -0.08)), k);
-      this.drive('upperArmR', mul(armQ, rot(Z_AXIS, 0.08)), k);
-      this.drive('forearmL', armQ, k);
-      this.drive('forearmR', armQ, k);
+      const armQ = aimQ;
+      const ka = k * t.aimGain;
+      this.drive('upperArmL', mul(armQ, rot(Z_AXIS, -0.08)), ka);
+      this.drive('upperArmR', mul(armQ, rot(Z_AXIS, 0.08)), ka);
+      this.drive('forearmL', armQ, ka);
+      this.drive('forearmR', armQ, ka);
+      for (const n of ['upperArmL', 'upperArmR', 'forearmL', 'forearmR'] as const) this.holdUp(n, k);
     } else {
       const arm = t.armSwing * w * Math.sin(this.walkPhase) * velFwd;
       this.drive('upperArmL', mul(_qYaw, mul(rot(X_AXIS, arm), rot(Z_AXIS, 0.15))), k * 0.6);
@@ -315,6 +351,12 @@ export class Ragdoll {
     const thighQ = mul(_qYaw, mul(rot(X_AXIS, pitch), rot(Z_AXIS, roll)));
     this.drive(thigh, thighQ, k);
     this.drive(shin, mul(thighQ, rot(X_AXIS, knee + tuck * 1.6)), k);
+  }
+
+  /** Cancel gravity on a limb so the pose controller only has to orient it (arms held out, reaching). */
+  private holdUp(name: PartName, k: number) {
+    const b = this.parts.get(name)!.body;
+    b.applyImpulse({ x: 0, y: -tuning.gravity * b.mass() * this.dt * k, z: 0 }, true);
   }
 
   /** PD controller: apply a torque impulse that rotates the part toward a world-space orientation. */
@@ -341,8 +383,13 @@ export class Ragdoll {
       const f = t.maxAngAccel / mag;
       ax *= f; ay *= f; az *= f;
     }
-    const s2 = p.inertia * this.dt;
-    p.body.applyTorqueImpulse({ x: ax * s2, y: ay * s2, z: az * s2 }, true);
+    // torque = I * alpha, done per axis in the body frame. A thin limb has almost no inertia about its
+    // long axis; using one averaged number there over-drives twist and makes arms wander.
+    // (_qCur holds the inverse rotation here; principal axes match body axes for our primitive shapes.)
+    _v.set(ax, ay, az).applyQuaternion(_qCur);
+    _v.set(_v.x * p.inertia.x, _v.y * p.inertia.y, _v.z * p.inertia.z).applyQuaternion(_qCur.invert());
+    const dt = this.dt;
+    p.body.applyTorqueImpulse({ x: _v.x * dt, y: _v.y * dt, z: _v.z * dt }, true);
   }
 
   private updateGrab(holding: boolean) {

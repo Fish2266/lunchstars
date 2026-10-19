@@ -7,7 +7,8 @@ export class Renderer {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(65, 1, 0.05, 300);
   readonly gl: THREE.WebGLRenderer;
-  private meshes: THREE.Object3D[] = [];
+  /** One mesh per sim entity, same order as `sim.entities`. */
+  meshes: THREE.Mesh[] = [];
   private builtVersion = -1;
   private sun: THREE.DirectionalLight;
 
@@ -74,6 +75,7 @@ export class Renderer {
     for (let i = 0; i < this.meshes.length; i++) {
       const o = i * 7;
       const m = this.meshes[i];
+      m.visible = t[o + 1] > -500; // sim parks hidden things far below the map
       m.position.set(t[o], t[o + 1], t[o + 2]);
       m.quaternion.set(t[o + 3], t[o + 4], t[o + 5], t[o + 6]);
     }
@@ -111,8 +113,10 @@ function materialFor(e: EntityDesc): THREE.Material {
   if (!m) {
     m = new THREE.MeshStandardMaterial({
       color: e.color,
-      roughness: e.role === 'player' ? 0.55 : 0.85,
-      metalness: 0,
+      roughness: e.role === 'player' ? 0.55 : e.role === 'fx' ? 0.35 : 0.85,
+      metalness: e.role === 'fx' ? 0.3 : 0,
+      emissive: e.role === 'fx' ? e.color : 0x000000,
+      emissiveIntensity: e.role === 'fx' ? 0.25 : 0,
     });
     matCache.set(key, m);
   }

@@ -9,7 +9,8 @@ export class Controls {
   private mouseButtons = new Set<number>();
   /** One-shot actions the client handles itself (debug tools). */
   readonly pressed = new Set<string>();
-  fireClicked = false;
+  /** Catches clicks shorter than a frame. */
+  private clickLatch = false;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     addEventListener('keydown', (e) => {
@@ -22,11 +23,12 @@ export class Controls {
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     canvas.addEventListener('mousedown', (e) => {
       if (!this.locked) {
-        canvas.requestPointerLock();
+        // Can be refused (e.g. inside an embedded preview); the game still works without it.
+        Promise.resolve(canvas.requestPointerLock()).catch(() => {});
         return;
       }
       this.mouseButtons.add(e.button);
-      if (e.button === 0) this.fireClicked = true;
+      if (e.button === 0) this.clickLatch = true;
     });
     addEventListener('mouseup', (e) => this.mouseButtons.delete(e.button));
     addEventListener('mousemove', (e) => {
@@ -57,6 +59,7 @@ export class Controls {
       aimPitch: this.pitch,
       jump: this.keys.has('Space'),
       grab: this.keys.has('KeyE') || this.mouseButtons.has(2),
+      fire: this.clickLatch || this.mouseButtons.has(0) || this.keys.has('KeyQ'),
     };
   }
 
@@ -68,6 +71,6 @@ export class Controls {
 
   endFrame() {
     this.pressed.clear();
-    this.fireClicked = false;
+    this.clickLatch = false;
   }
 }

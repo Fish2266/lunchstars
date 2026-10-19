@@ -10,14 +10,21 @@
       #crosshair { position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 2px #0006; pointer-events: none; }
       #help { position: fixed; left: 12px; bottom: 12px; color: #fff; font-size: 13px; line-height: 1.5; text-shadow: 0 1px 2px #000a; pointer-events: none; }
       #help b { color: #ffe066; }
+      #hud { position: fixed; right: 16px; bottom: 14px; color: #fff; text-align: right; text-shadow: 0 2px 3px #000a; pointer-events: none; }
+      #hud .weapon { font-size: 22px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; }
+      #hud .ammo { font-size: 15px; opacity: 0.9; }
+      #hud .stun { color: #ffd54a; font-weight: 700; }
     </style>
   </head>
   <body>
     <div id="crosshair"></div>
     <div id="help">
       <b>Click</b> to lock mouse · <b>WASD</b> move · <b>Space</b> jump · hold <b>E</b> / <b>Right mouse</b> grab<br />
-      <b>Left mouse</b> debug shove ray · <b>F</b> shove dummy · <b>R</b> reset · <b>`</b> toggle tuning panel
+     
+      <b>Left mouse</b> / <b>Q</b> shoot (punch when unarmed) · walk over glowing guns to pick up<br />
+      <b>F</b> shove dummy · <b>R</b> reset · <b>`</b> toggle tuning panel
     </div>
+    <div id="hud"><div class="weapon"></div><div class="ammo"></div><div class="stun"></div></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
