@@ -3,7 +3,7 @@
 import GUI from 'lil-gui';
 import { tuning } from '../sim/tuning';
 
-const STORAGE_KEY = 'lunchstars.tuning.v3'; // bump when tuning meanings change
+const STORAGE_KEY = 'lunchstars.tuning.v4'; // bump when tuning meanings change
 
 export function loadSavedTuning() {
   try {

@@ -46,11 +46,11 @@ export const tuning = {
   // Foot placement: a foot steps when it falls `stepDist` behind where it should be.
   stepTime: 0.28, // seconds per step
   stepDist: 0.3,
-  stepHeight: 0.17,
+  stepHeight: 0.13,
   stepLead: 0.14, // how far ahead (in seconds of velocity) a step lands
   stanceWidth: 0.13,
   // Hips shift sideways over the stance foot.
-  sway: 0.65,
+  sway: 0.45,
   swayKp: 45,
   swayKd: 8,
   footDrive: 0.6, // how hard feet are pulled to their targets
@@ -58,10 +58,10 @@ export const tuning = {
   stepVelSmoothing: 8,
   legPoseGain: 0.5, // leg pose stiffness multiplier
   kneeBend: 1.1,
-  armSwing: 0.5,
-  waddle: 0.11, // side-to-side rock toward the stance leg
-  hipTwist: 0.18,
-  bob: 0.05,
+  armSwing: 0.32,
+  waddle: 0.06, // side-to-side rock toward the stance leg
+  hipTwist: 0.08,
+  bob: 0.035,
 
   // Grab.
   grabRadius: 0.2,
