@@ -25,8 +25,13 @@ src/
 
 ## Active ragdoll model
 - 11 bodies: pelvis, chest, head, 2× thigh/shin, 2× upper arm/forearm. Ball joints, revolute knees/elbows with limits. Each player is in its own collision group so it never collides with itself.
-- **Hover spring**: a ray from the pelvis finds the ground; a spring-damper force (split pelvis/chest) holds the pelvis at `standHeight`. This carries the weight — legs are mostly animation. Ignores held objects and anything taller than `maxStepUp`.
-- **Pose PD**: every body part gets a torque toward a target world orientation (`drive()`), with gains × `stiffness`. Pelvis/chest/head target upright + facing yaw; legs follow a sine walk cycle; arms swing, or reach along aim pitch while grabbing.
+- **No strings.** Nothing external holds the character up. Every support force is an internal pair:
+  - *Leg spring*: pushes the pelvis to `standHeight` and pushes the stance feet into the ground by the same amount, so the ground (through the feet) carries the weight.
+  - *Spine*: lifts the chest and pushes the pelvis down by the upper body's weight, so the torso controller only has to orient it.
+  - Walking force goes to the hips, with `footPush` of the reaction going into the planted feet.
+  The surface under the pelvis doesn't count as ground if it's more than `maxStepUp` above the feet (a crate we walked into).
+- **Foot placement** (not a sine wave): each foot is *planted* (pinned where it landed, high friction) or *swinging* (low friction, pulled along an arc to its `home`: under the hip, led by velocity). When a planted foot falls `stepDist` behind its home, it steps. One foot at a time, alternating. Legs are posed to point from hip to foot target, bending the knee mid-swing. In the air or stunned, stepping stops and legs go loose.
+- **Pose PD**: every body part gets a torque toward a target world orientation (`drive()`), with gains × `stiffness`. Pelvis/chest/head target upright + facing yaw, plus lean (speed and acceleration), waddle (roll over the stance foot), and hip twist from the stride. Torso, head, and idle arms use lower gain multipliers so they wobble.
 - **Stun**: hits add `stunTimer`; `stiffness = clamp(1 - stunTimer/stunTime, stunFloor, 1)`, which also scales the hover spring and locomotion, so a big hit makes the character crumple and then stand back up.
 - **Arm hold-up**: arms that aim or reach get gravity cancelled, so the PD only has to orient them. PD torque uses per-axis inertia (thin limbs barely resist twist).
 - **Grab**: while held, each hand checks a small sphere at its tip; on overlap it creates a ball joint to that body (players, props, or static level geometry — so you can hang off ledges). Released when the button is let go.

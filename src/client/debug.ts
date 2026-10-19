@@ -3,7 +3,7 @@
 import GUI from 'lil-gui';
 import { tuning } from '../sim/tuning';
 
-const STORAGE_KEY = 'lunchstars.tuning';
+const STORAGE_KEY = 'lunchstars.tuning.v2'; // bump when tuning meanings change
 
 export function loadSavedTuning() {
   try {
@@ -33,6 +33,11 @@ export function createDebugPanel(actions: { shoveDummy: () => void; reset: () =>
   bal.add(tuning, 'limbKp', 0, 1000, 5).name('limb stiffness');
   bal.add(tuning, 'limbKd', 0, 100, 1).name('limb damping');
   bal.add(tuning, 'aimGain', 0.5, 6, 0.1).name('aim arm gain');
+  bal.add(tuning, 'torsoGain', 0.1, 1.5, 0.01).name('torso stiffness ×');
+  bal.add(tuning, 'headGain', 0.05, 1.5, 0.01).name('head stiffness ×');
+  bal.add(tuning, 'idleArmGain', 0, 1.5, 0.01).name('idle arm stiffness ×');
+  bal.add(tuning, 'legSupport', 0, 1, 0.01).name('legs carry weight');
+  bal.add(tuning, 'spineSupport', 0, 1.2, 0.01).name('spine support');
   bal.add(tuning, 'maxAngAccel', 50, 3000, 10).name('max ang accel');
   bal.add(tuning, 'standHeight', 0.7, 1.3, 0.01).name('stand height');
   bal.add(tuning, 'hoverKp', 0, 400, 1).name('hover stiffness');
@@ -42,13 +47,27 @@ export function createDebugPanel(actions: { shoveDummy: () => void; reset: () =>
   const move = gui.addFolder('Movement');
   move.add(tuning, 'moveSpeed', 0, 10, 0.1).name('move speed');
   move.add(tuning, 'moveAccel', 0, 30, 0.5).name('move accel');
+  move.add(tuning, 'maxMoveAccel', 0, 40, 0.5).name('max accel');
+  move.add(tuning, 'turnRate', 1, 20, 0.5).name('turn rate');
   move.add(tuning, 'airControl', 0, 1, 0.01).name('air control');
   move.add(tuning, 'jumpImpulse', 0, 15, 0.1).name('jump');
   move.add(tuning, 'turnLean', 0, 0.6, 0.01).name('lean');
-  move.add(tuning, 'stepRate', 0, 6, 0.05).name('step rate');
-  move.add(tuning, 'strideAngle', 0, 1.4, 0.01).name('stride');
+  move.add(tuning, 'accelLean', 0, 0.3, 0.005).name('accel lean');
+  move.add(tuning, 'stepTime', 0.08, 0.5, 0.005).name('step time');
+  move.add(tuning, 'stepDist', 0.05, 0.6, 0.01).name('step trigger dist');
+  move.add(tuning, 'stepHeight', 0, 0.4, 0.005).name('step height');
+  move.add(tuning, 'stepLead', 0, 0.4, 0.005).name('step lead');
+  move.add(tuning, 'stanceWidth', 0, 0.3, 0.005).name('stance width');
+  move.add(tuning, 'footDrive', 0, 2, 0.01).name('foot drive');
+  move.add(tuning, 'legPoseGain', 0, 2, 0.01).name('leg pose ×');
+  move.add(tuning, 'footGrip', 0, 2, 0.01).name('foot grip');
+  move.add(tuning, 'footGlide', 0, 1, 0.01).name('swing foot friction');
+  move.add(tuning, 'footPush', 0, 1, 0.01).name('push through feet');
   move.add(tuning, 'kneeBend', 0, 2, 0.01).name('knee bend');
   move.add(tuning, 'armSwing', 0, 1.5, 0.01).name('arm swing');
+  move.add(tuning, 'waddle', 0, 0.4, 0.005);
+  move.add(tuning, 'hipTwist', 0, 0.5, 0.005).name('hip twist');
+  move.add(tuning, 'bob', 0, 0.2, 0.005);
   move.add(tuning, 'gravity', -40, -5, 0.5);
 
   const hit = gui.addFolder('Hits & stun');

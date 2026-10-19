@@ -12,24 +12,50 @@ export const tuning = {
   // Cap on controller angular acceleration, prevents explosions when far from the target.
   maxAngAccel: 900,
 
-  // Hover spring that holds the pelvis at standing height (legs mostly animate, this carries the weight).
+  // Torso and head follow the pelvis loosely (multipliers on balance gains) — lower = wobblier.
+  torsoGain: 0.75,
+  headGain: 0.35,
+  // Idle arm gain multiplier — low = floppy arms.
+  idleArmGain: 0.3,
+
+  // Leg spring that holds the pelvis at standing height. Its reaction pushes the stance foot into the
+  // ground (legSupport = 1), so the legs carry the weight. 0 = old puppet-string behavior.
   standHeight: 1.02,
+  legSupport: 1,
+  // Fraction of the walking push that goes through the feet (1 = fully physical, 0 = pushed at the hips).
+  footPush: 0.3,
+  footGrip: 1.0,
+  footGlide: 0.2,
+  // Fraction of upper-body weight the spine carries (internal, chest up / pelvis down).
+  spineSupport: 0.9,
   hoverKp: 120,
   hoverKd: 14,
   maxStepUp: 0.3,
 
   // Locomotion.
-  moveSpeed: 4.2,
-  moveAccel: 9,
+  moveSpeed: 3.3,
+  moveAccel: 6,
+  maxMoveAccel: 14, // must stay under foot friction (~1.6 * gravity) or feet skid
   airControl: 0.25,
   jumpImpulse: 5.2,
-  turnLean: 0.12,
+  turnLean: 0.1,
+  accelLean: 0.07,
+  turnRate: 7,
 
   // Walk cycle.
-  stepRate: 2.6,
-  strideAngle: 0.65,
-  kneeBend: 0.9,
-  armSwing: 0.45,
+  // Foot placement: a foot steps when it falls `stepDist` behind where it should be.
+  stepTime: 0.2, // seconds per step
+  stepDist: 0.2,
+  stepHeight: 0.14,
+  stepLead: 0.08, // how far ahead (in seconds of velocity) a step lands
+  stanceWidth: 0.12,
+  footDrive: 0.6, // how hard feet are pulled to their targets
+  legPoseGain: 0.5, // leg pose stiffness multiplier
+  kneeBend: 1.1,
+  armSwing: 0.5,
+  waddle: 0.11, // side-to-side rock toward the stance leg
+  hipTwist: 0.18,
+  bob: 0.05,
 
   // Grab.
   grabRadius: 0.2,

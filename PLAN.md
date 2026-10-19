@@ -30,6 +30,12 @@ Work one phase at a time. A phase is done only when its "done when" is true. Com
 - `Sim.step` already respawns below `killY`; turn that into elimination + round state in the sim (pure), with a `round` SimEvent stream.
 - Hazards: lava/spikes as sensor colliders → elimination or huge stun+impulse.
 
+## Locomotion rework (Gang Beasts feel)
+- Removed the puppet-string support: legs and spine now carry weight through internal force pairs.
+- Replaced the sine-wave walk with foot placement: planted feet stay put (≈5 cm drift vs. sliding at body speed before), steps alternate ~5/s, feet lift ~12 cm.
+- Added waddle, hip twist, acceleration lean, hip bob, floppier head/arms. Knocked-down characters scramble back up through their legs.
+- Grippy feet mean knockback slides less (shotgun ~2 m at 3 m range, was ~3 m). May want a knockback bump after play-testing.
+
 ## Known feel issues / tuning backlog
 - Grab reach takes ~0.8 s; consider stronger arm gains while grabbing.
 - One-handed lifting of a 20 kg crate doesn't work; two hands + stronger arms, or lighter props.
