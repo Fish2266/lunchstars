@@ -14,7 +14,7 @@ export const tuning = {
 
   // Torso and head follow the pelvis loosely (multipliers on balance gains) — lower = wobblier.
   torsoGain: 0.75,
-  headGain: 0.35,
+  headGain: 1.0,
   // Idle arm gain multiplier — low = floppy arms.
   idleArmGain: 0.3,
 
@@ -23,7 +23,7 @@ export const tuning = {
   standHeight: 1.02,
   legSupport: 1,
   // Fraction of the walking push that goes through the feet (1 = fully physical, 0 = pushed at the hips).
-  footPush: 0.3,
+  footPush: 1,
   footGrip: 1.0,
   footGlide: 0.2,
   // Fraction of upper-body weight the spine carries (internal, chest up / pelvis down).
@@ -33,7 +33,7 @@ export const tuning = {
   maxStepUp: 0.3,
 
   // Locomotion.
-  moveSpeed: 3.3,
+  moveSpeed: 2.8,
   moveAccel: 6,
   maxMoveAccel: 14, // must stay under foot friction (~1.6 * gravity) or feet skid
   airControl: 0.25,
@@ -44,12 +44,18 @@ export const tuning = {
 
   // Walk cycle.
   // Foot placement: a foot steps when it falls `stepDist` behind where it should be.
-  stepTime: 0.2, // seconds per step
-  stepDist: 0.2,
-  stepHeight: 0.14,
-  stepLead: 0.08, // how far ahead (in seconds of velocity) a step lands
-  stanceWidth: 0.12,
+  stepTime: 0.28, // seconds per step
+  stepDist: 0.3,
+  stepHeight: 0.17,
+  stepLead: 0.14, // how far ahead (in seconds of velocity) a step lands
+  stanceWidth: 0.13,
+  // Hips shift sideways over the stance foot.
+  sway: 0.65,
+  swayKp: 45,
+  swayKd: 8,
   footDrive: 0.6, // how hard feet are pulled to their targets
+  swingReaction: 0.3, // how much of the leg-swing pull kicks back on the hips
+  stepVelSmoothing: 8,
   legPoseGain: 0.5, // leg pose stiffness multiplier
   kneeBend: 1.1,
   armSwing: 0.5,
@@ -65,6 +71,7 @@ export const tuning = {
   shoveImpulse: 14,
   stunFloor: 0.04, // stiffness multiplier while fully stunned
   stunTime: 1.4, // seconds to recover to full stiffness
+  staggerTime: 0.4, // seconds of lost footing after any hit
   stunPerImpulse: 0.1, // stun seconds added per unit of impulse
 
   // World.

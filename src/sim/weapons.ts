@@ -31,11 +31,11 @@ export interface WeaponDef {
 
 export const weapons: Record<WeaponKind, WeaponDef> = {
   pistol: {
-    ammo: 12, cooldown: 0.28, knockback: 18, pellets: 1, spread: 0.01, range: 60, falloff: 0.7, lift: 0.25, recoil: 0.6,
+    ammo: 12, cooldown: 0.28, knockback: 22, pellets: 1, spread: 0.01, range: 60, falloff: 0.7, lift: 0.25, recoil: 0.6,
     hands: 1, shape: { kind: 'box', hx: 0.04, hy: 0.07, hz: 0.14 }, color: 0x2b2d33,
   },
   shotgun: {
-    ammo: 6, cooldown: 0.85, knockback: 12, pellets: 8, spread: 0.1, range: 14, falloff: 0.15, lift: 0.55, recoil: 6,
+    ammo: 6, cooldown: 0.85, knockback: 16, pellets: 8, spread: 0.1, range: 14, falloff: 0.15, lift: 0.55, recoil: 6,
     hands: 2, shape: { kind: 'box', hx: 0.045, hy: 0.06, hz: 0.36 }, color: 0x6b3f22,
   },
   grenade: {

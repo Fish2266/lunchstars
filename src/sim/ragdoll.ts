@@ -79,6 +79,8 @@ interface Leg {
   onGround: boolean;
   /** Swing progress 0..1. */
   t: number;
+  /** Seconds since this foot planted. */
+  plantAge: number;
   sole: V3;
   plant: V3;
   from: V3;
@@ -115,6 +117,7 @@ export class Ragdoll {
 
   grounded = false;
   stunTimer = 0;
+  staggerTimer = 0;
   stiffness = 1;
   private walkAmount = 0;
   private jumpCooldown = 0;
@@ -124,6 +127,7 @@ export class Ragdoll {
   private dt = 1 / 60;
   readonly legs: Leg[];
   private lastStep: Leg | null = null;
+  private smoothVel = { x: 0, z: 0 };
 
   constructor(
     private readonly R: R,
@@ -184,7 +188,7 @@ export class Ragdoll {
 
     const makeLeg = (side: 1 | -1, thigh: PartName, shin: PartName): Leg => ({
       side, thigh: this.parts.get(thigh)!, shin: this.parts.get(shin)!, collider: footColliders.get(shin)!,
-      planted: false, swinging: false, onGround: false, t: 0,
+      planted: false, swinging: false, onGround: false, t: 0, plantAge: 0,
       sole: { x: 0, y: 0, z: 0 }, plant: { x: 0, y: 0, z: 0 }, from: { x: 0, y: 0, z: 0 },
       home: { x: 0, y: 0, z: 0 }, target: { x: 0, y: 0, z: 0 },
     });
@@ -215,6 +219,8 @@ export class Ragdoll {
 
   addStun(seconds: number) {
     this.stunTimer = Math.min(4, this.stunTimer + seconds);
+    // Any hit knocks you off your footing for a moment, so knockback slides you instead of being absorbed.
+    this.staggerTimer = Math.max(this.staggerTimer, tuning.staggerTime);
   }
 
   teleport(pos: { x: number; y: number; z: number }) {
@@ -226,8 +232,10 @@ export class Ragdoll {
       p.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     }
     this.stunTimer = 0;
+    this.staggerTimer = 0;
     this.yaw = 0;
     for (const leg of this.legs) { leg.planted = false; leg.swinging = false; }
+    this.smoothVel.x = 0; this.smoothVel.z = 0;
   }
 
   /** World position of the right hand (where guns are held). */
@@ -297,7 +305,8 @@ export class Ragdoll {
     // can't hold us up. Lying on the floor, the floor is level with our feet, so we still get back up.
     const surfaceY = hit ? pp.y - groundDist : -Infinity;
     const tooTall = hit ? surfaceY - Math.min(legL.sole.y, legR.sole.y) > t.maxStepUp : false;
-    const canStep = this.grounded && !tooTall && k > 0.35;
+    this.staggerTimer = Math.max(0, this.staggerTimer - dt);
+    const canStep = this.grounded && !tooTall && k > 0.35 && this.staggerTimer === 0;
 
     const walkSpeed = this.grounded ? Math.max(speed, ml * t.moveSpeed * 0.6) : 0;
     this.walkAmount += (clamp(walkSpeed / t.moveSpeed, 0, 1) - this.walkAmount) * Math.min(1, 8 * dt);
@@ -306,10 +315,15 @@ export class Ragdoll {
     // --- Stepping ---
     // Each foot is either planted (stays exactly where it landed) or swinging to a spot ahead of the hips.
     // One foot at a time. The body moves over planted feet, so nothing skates.
+    // Aim steps with a smoothed velocity, so a jolt to the hips doesn't make the feet dance.
+    const sv = this.smoothVel;
+    const blend = Math.min(1, t.stepVelSmoothing * dt);
+    sv.x += (pv.x - sv.x) * blend;
+    sv.z += (pv.z - sv.z) * blend;
     const lead = t.stepLead + t.stepTime * 0.5;
     for (const leg of this.legs) {
-      leg.home.x = pp.x + leftX * leg.side * t.stanceWidth + pv.x * lead;
-      leg.home.z = pp.z + leftZ * leg.side * t.stanceWidth + pv.z * lead;
+      leg.home.x = pp.x + leftX * leg.side * t.stanceWidth + sv.x * lead;
+      leg.home.z = pp.z + leftZ * leg.side * t.stanceWidth + sv.z * lead;
       leg.home.y = surfaceY;
     }
     if (!canStep) {
@@ -353,14 +367,21 @@ export class Ragdoll {
         let vx = (tx - leg.sole.x) / 0.06, vy = (ty - leg.sole.y) / 0.06, vz = (tz - leg.sole.z) / 0.06;
         const vm = Math.hypot(vx, vy, vz);
         if (vm > 9) { vx *= 9 / vm; vy *= 9 / vm; vz *= 9 / vm; }
-        const g = t.footDrive * m * k;
-        shin.applyImpulseAtPoint({ x: (vx - fv.x) * g, y: (vy - fv.y) * g, z: (vz - fv.z) * g }, leg.sole, true);
-        this.holdUp(leg.shin.def.name, k);
-        this.holdUp(leg.thigh.def.name, k);
+        // Hip muscles swing the leg: the pull on the foot pushes back on the pelvis.
+        // Ease in at lift-off and out before landing so the hips don't get a jolt every step.
+        const ease = Math.min(1, leg.t * 5, (1 - leg.t) * 4);
+        const g = t.footDrive * m * k * ease * ease;
+        const ix = (vx - fv.x) * g, iy = (vy - fv.y) * g, iz = (vz - fv.z) * g;
+        shin.applyImpulseAtPoint({ x: ix, y: iy, z: iz }, leg.sole, true);
+        const r = t.swingReaction;
+        pelvis.applyImpulse({ x: -ix * r, y: -iy * r, z: -iz * r }, true);
+        this.holdUp(leg.shin.def.name, k, pelvis);
+        this.holdUp(leg.thigh.def.name, k, pelvis);
         leg.collider.setFriction(t.footGlide);
       } else if (leg.planted) {
-        // Pin it horizontally (what a real sole's grip does).
-        const g = t.footDrive * m * k;
+        // Pin it horizontally (what a real sole's grip does), easing in so landing doesn't jolt the hips.
+        leg.plantAge += dt;
+        const g = t.footDrive * m * k * Math.min(1, leg.plantAge * 10);
         const ax = (leg.plant.x - leg.sole.x) * 12 - fv.x, az = (leg.plant.z - leg.sole.z) * 12 - fv.z;
         shin.applyImpulseAtPoint({ x: ax * g, y: 0, z: az * g }, leg.sole, true);
         leg.target.x = leg.plant.x; leg.target.y = leg.plant.y; leg.target.z = leg.plant.z;
@@ -389,13 +410,31 @@ export class Ragdoll {
     const dvx = mx * t.moveSpeed - pv.x;
     const dvz = mz * t.moveSpeed - pv.z;
     if (this.grounded) {
-      let ax = dvx * t.moveAccel * k, az = dvz * t.moveAccel * k;
+      // While staggered we can't brake, so knockback carries us.
+      const control = this.staggerTimer > 0 ? 0.1 : 1;
+      let ax = dvx * t.moveAccel * k * control, az = dvz * t.moveAccel * k * control;
       const am = Math.hypot(ax, az);
       if (am > t.maxMoveAccel) { ax *= t.maxMoveAccel / am; az *= t.maxMoveAccel / am; }
       pushOffFeet(ax * this.totalMass * dt, 0, az * this.totalMass * dt);
     } else {
       const a = t.moveAccel * t.airControl * k * this.totalMass * dt;
       pelvis.applyImpulse({ x: dvx * a, y: 0, z: dvz * a }, true);
+    }
+
+    // --- Weight shift ---
+    // Move the hips sideways over the foot that's holding us up (between both feet when standing).
+    // This is the big side-to-side waddle; the force goes through the feet like everything else.
+    if (canStep && wSum > 0) {
+      let fx = 0, fz = 0;
+      if (legL.planted && legR.planted) { fx = (legL.sole.x + legR.sole.x) / 2; fz = (legL.sole.z + legR.sole.z) / 2; }
+      else { const st = legL.planted ? legL : legR; fx = st.sole.x; fz = st.sole.z; }
+      // Don't fight a strafe: fade the shift out when moving sideways and damp relative to the wanted speed.
+      const desLat = (mx * leftX + mz * leftZ) * t.moveSpeed;
+      const fade = 1 - Math.min(1, Math.abs(desLat) / t.moveSpeed);
+      const lat = ((fx - pp.x) * leftX + (fz - pp.z) * leftZ) * t.sway * fade;
+      const vlat = pv.x * leftX + pv.z * leftZ;
+      const a = (t.swayKp * lat - t.swayKd * (vlat - desLat * (1 - fade))) * k * this.totalMass * dt;
+      pushOffFeet(leftX * a, 0, leftZ * a);
     }
 
     // --- Leg support ---
@@ -445,7 +484,9 @@ export class Ragdoll {
     // Bend at the waist when reaching down, so low things are grabbable.
     const bend = input.grab ? clamp(-input.aimPitch, 0, 1.1) * 0.8 : 0;
     this.drive('chest', mul(_qYaw, mul(rot(Y_AXIS, -twist * 0.5), mul(rot(X_AXIS, lean + bend), rot(Z_AXIS, roll)))), k * t.torsoGain);
-    this.drive('head', mul(_qYaw, rot(Z_AXIS, -roll * 0.5)), k * t.headGain);
+    // Neck: hold the head's weight on the chest so it doesn't loll, then point it.
+    this.holdUp('head', k, this.chest);
+    this.drive('head', mul(_qYaw, rot(X_AXIS, lean * -0.4)), k * t.headGain);
 
     for (const leg of this.legs) this.driveLeg(leg, canStep, k);
     const armStride = t.armSwing * stride;
@@ -456,13 +497,13 @@ export class Ragdoll {
       const ka = k * t.aimGain;
       this.drive('upperArmR', mul(aimQ, rot(Z_AXIS, this.aimHands === 2 ? 0.25 : 0)), ka);
       this.drive('forearmR', aimQ, ka);
-      this.holdUp('upperArmR', k);
-      this.holdUp('forearmR', k);
+      this.holdUp('upperArmR', k, this.chest);
+      this.holdUp('forearmR', k, this.chest);
       if (this.aimHands === 2) {
         this.drive('upperArmL', mul(aimQ, rot(Z_AXIS, -0.45)), ka);
         this.drive('forearmL', mul(aimQ, rot(Y_AXIS, -0.5)), ka);
-        this.holdUp('upperArmL', k);
-        this.holdUp('forearmL', k);
+        this.holdUp('upperArmL', k, this.chest);
+        this.holdUp('forearmL', k, this.chest);
       } else {
         const arm = armStride;
         this.drive('upperArmL', mul(_qYaw, mul(rot(X_AXIS, arm), rot(Z_AXIS, 0.15))), k * t.idleArmGain);
@@ -476,7 +517,7 @@ export class Ragdoll {
       this.drive('upperArmR', mul(armQ, rot(Z_AXIS, 0.08)), ka);
       this.drive('forearmL', armQ, ka);
       this.drive('forearmR', armQ, ka);
-      for (const n of ['upperArmL', 'upperArmR', 'forearmL', 'forearmR'] as const) this.holdUp(n, k);
+      for (const n of ['upperArmL', 'upperArmR', 'forearmL', 'forearmR'] as const) this.holdUp(n, k, this.chest);
     } else {
       // Arms are loose: they swing opposite the legs but mostly flop around with the body.
       const arm = armStride;
@@ -524,6 +565,7 @@ export class Ragdoll {
   private plantFoot(leg: Leg) {
     leg.swinging = false;
     leg.planted = true;
+    leg.plantAge = 0;
     leg.plant.x = leg.sole.x; leg.plant.y = leg.sole.y; leg.plant.z = leg.sole.z;
   }
 
@@ -545,10 +587,15 @@ export class Ragdoll {
     leg.onGround = !!hit;
   }
 
-  /** Cancel gravity on a limb so the pose controller only has to orient it (arms held out, reaching). */
-  private holdUp(name: PartName, k: number) {
+  /**
+   * Cancel gravity on a part so its pose controller only has to orient it (arms held out, a swinging leg,
+   * the head on its neck). The same force pushes down on `onto`, so it's a muscle, not a string.
+   */
+  private holdUp(name: PartName, k: number, onto: Body) {
     const b = this.parts.get(name)!.body;
-    b.applyImpulse({ x: 0, y: -tuning.gravity * b.mass() * this.dt * k, z: 0 }, true);
+    const lift = -tuning.gravity * b.mass() * this.dt * k;
+    b.applyImpulse({ x: 0, y: lift, z: 0 }, true);
+    onto.applyImpulse({ x: 0, y: -lift, z: 0 }, true);
   }
 
   /** PD controller: apply a torque impulse that rotates the part toward a world-space orientation. */

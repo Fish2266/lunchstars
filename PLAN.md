@@ -34,7 +34,7 @@ Work one phase at a time. A phase is done only when its "done when" is true. Com
 - Removed the puppet-string support: legs and spine now carry weight through internal force pairs.
 - Replaced the sine-wave walk with foot placement: planted feet stay put (≈5 cm drift vs. sliding at body speed before), steps alternate ~5/s, feet lift ~12 cm.
 - Added waddle, hip twist, acceleration lean, hip bob, floppier head/arms. Knocked-down characters scramble back up through their legs.
-- Grippy feet mean knockback slides less (shotgun ~2 m at 3 m range, was ~3 m). May want a knockback bump after play-testing.
+- Round 2: neck muscle holds the head up; walking now pushes off the planted foot (no force at the hips), steps are slower and weightier (~3.5/s) with a sideways weight shift over the stance foot; leg swing kicks back on the hips. Any hit causes a 0.4 s stagger (no footing, no braking) so knockback still carries. Knockback raised to compensate: pistol ~1.1 m per hit, shotgun ~2.5 m.
 
 ## Known feel issues / tuning backlog
 - Grab reach takes ~0.8 s; consider stronger arm gains while grabbing.

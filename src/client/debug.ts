@@ -3,7 +3,7 @@
 import GUI from 'lil-gui';
 import { tuning } from '../sim/tuning';
 
-const STORAGE_KEY = 'lunchstars.tuning.v2'; // bump when tuning meanings change
+const STORAGE_KEY = 'lunchstars.tuning.v3'; // bump when tuning meanings change
 
 export function loadSavedTuning() {
   try {
@@ -58,7 +58,11 @@ export function createDebugPanel(actions: { shoveDummy: () => void; reset: () =>
   move.add(tuning, 'stepHeight', 0, 0.4, 0.005).name('step height');
   move.add(tuning, 'stepLead', 0, 0.4, 0.005).name('step lead');
   move.add(tuning, 'stanceWidth', 0, 0.3, 0.005).name('stance width');
+  move.add(tuning, 'sway', 0, 1.2, 0.01).name('weight shift');
+  move.add(tuning, 'swayKp', 0, 150, 1).name('weight shift stiffness');
+  move.add(tuning, 'swayKd', 0, 40, 0.5).name('weight shift damping');
   move.add(tuning, 'footDrive', 0, 2, 0.01).name('foot drive');
+  move.add(tuning, 'swingReaction', 0, 1, 0.01).name('swing kickback');
   move.add(tuning, 'legPoseGain', 0, 2, 0.01).name('leg pose ×');
   move.add(tuning, 'footGrip', 0, 2, 0.01).name('foot grip');
   move.add(tuning, 'footGlide', 0, 1, 0.01).name('swing foot friction');
@@ -74,6 +78,7 @@ export function createDebugPanel(actions: { shoveDummy: () => void; reset: () =>
   hit.add(tuning, 'shoveImpulse', 0, 60, 0.5).name('knockback');
   hit.add(tuning, 'stunFloor', 0, 1, 0.01).name('stunned stiffness');
   hit.add(tuning, 'stunTime', 0.1, 5, 0.05).name('recover time');
+  hit.add(tuning, 'staggerTime', 0, 1.5, 0.01).name('lost footing time');
   hit.add(tuning, 'stunPerImpulse', 0, 0.3, 0.005).name('stun per impulse');
   hit.add(tuning, 'grabRadius', 0.05, 0.4, 0.01).name('grab radius');
 

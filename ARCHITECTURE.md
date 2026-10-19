@@ -28,7 +28,10 @@ src/
 - **No strings.** Nothing external holds the character up. Every support force is an internal pair:
   - *Leg spring*: pushes the pelvis to `standHeight` and pushes the stance feet into the ground by the same amount, so the ground (through the feet) carries the weight.
   - *Spine*: lifts the chest and pushes the pelvis down by the upper body's weight, so the torso controller only has to orient it.
-  - Walking force goes to the hips, with `footPush` of the reaction going into the planted feet.
+  - Walking pushes off the planted foot: force on the hips, equal and opposite on the stance foot (`footPush` = 1), so you only move when a foot is down.
+  - *Neck*, *arm* and *swinging-leg* muscles cancel those parts' weight and push the same amount down on the chest/pelvis (`holdUp`).
+  - *Weight shift*: hips are pulled sideways over the stance foot (between both feet at rest), faded out when strafing.
+- **Stagger**: any hit removes footing and braking for `staggerTime`, so knockback slides you instead of being absorbed by planted feet.
   The surface under the pelvis doesn't count as ground if it's more than `maxStepUp` above the feet (a crate we walked into).
 - **Foot placement** (not a sine wave): each foot is *planted* (pinned where it landed, high friction) or *swinging* (low friction, pulled along an arc to its `home`: under the hip, led by velocity). When a planted foot falls `stepDist` behind its home, it steps. One foot at a time, alternating. Legs are posed to point from hip to foot target, bending the knee mid-swing. In the air or stunned, stepping stops and legs go loose.
 - **Pose PD**: every body part gets a torque toward a target world orientation (`drive()`), with gains × `stiffness`. Pelvis/chest/head target upright + facing yaw, plus lean (speed and acceleration), waddle (roll over the stance foot), and hip twist from the stride. Torso, head, and idle arms use lower gain multipliers so they wobble.
