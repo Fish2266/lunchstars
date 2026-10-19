@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lunch Stars</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #8ec5ff; font-family: system-ui, sans-serif; }
+      canvas { display: block; }
+      #crosshair { position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 2px #0006; pointer-events: none; }
+      #help { position: fixed; left: 12px; bottom: 12px; color: #fff; font-size: 13px; line-height: 1.5; text-shadow: 0 1px 2px #000a; pointer-events: none; }
+      #help b { color: #ffe066; }
+    </style>
+  </head>
+  <body>
+    <div id="crosshair"></div>
+    <div id="help">
+      <b>Click</b> to lock mouse · <b>WASD</b> move · <b>Space</b> jump · hold <b>E</b> / <b>Right mouse</b> grab<br />
+      <b>Left mouse</b> debug shove ray · <b>F</b> shove dummy · <b>R</b> reset · <b>`</b> toggle tuning panel
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
