@@ -35,11 +35,33 @@ export class Bot {
   /** What the bot is doing, for the debug HUD. */
   state = 'idle';
 
-  constructor(private readonly sim: Sim, private readonly id: number, private readonly targetId: number) {}
+  private retargetClock = 0;
+
+  constructor(private readonly sim: Sim, private readonly id: number, private targetId: number) {}
+
+  /** With more than one opponent: go after the nearest one still standing (but finish a haul first). */
+  private retarget(dt: number) {
+    this.retargetClock -= dt;
+    const cur = this.sim.players.get(this.targetId);
+    const hauling = (this.sim.fighters.get(this.targetId)?.koTimer ?? 0) > 0;
+    if (cur?.active && !this.sim.left.has(this.targetId) && (hauling || this.retargetClock > 0)) return;
+    this.retargetClock = 2;
+    const me = this.sim.players.get(this.id);
+    if (!me?.active) return;
+    const a = me.chest.translation();
+    let best = Infinity;
+    for (const [id, r] of this.sim.players) {
+      if (id === this.id || !r.active || this.sim.left.has(id)) continue;
+      const b = r.chest.translation();
+      const d = Math.hypot(b.x - a.x, b.z - a.z);
+      if (d < best) { best = d; this.targetId = id; }
+    }
+  }
 
   think(dt: number): PlayerInput {
     const i = this.input;
     i.moveX = 0; i.moveZ = 0; i.fire = false; i.jump = false; i.cycle = false;
+    this.retarget(dt);
     const me = this.sim.players.get(this.id);
     const target = this.sim.players.get(this.targetId);
     const f = this.sim.fighters.get(this.id);

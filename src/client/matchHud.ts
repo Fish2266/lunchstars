@@ -25,6 +25,14 @@ const CSS = `
 
 const NAMES = ['Red', 'Blue', 'Yellow', 'Green', 'Purple', 'Pink'];
 
+/** A player's name and CSS colour come from their slot (the order they joined). */
+export function slotName(slot: number) {
+  return NAMES[slot % NAMES.length];
+}
+export function slotColor(slot: number) {
+  return '#' + PLAYER_COLORS[slot % PLAYER_COLORS.length].toString(16).padStart(6, '0');
+}
+
 export class MatchHud {
   private score = document.createElement('div');
   private banner = document.createElement('div');
@@ -57,12 +65,12 @@ export class MatchHud {
   }
 
   private name(id: number) {
-    const n = NAMES[this.slotOf(id) % NAMES.length];
+    const n = slotName(this.slotOf(id));
     return id === this.localId ? `${n} (you)` : n;
   }
 
   private color(id: number) {
-    return '#' + PLAYER_COLORS[this.slotOf(id) % PLAYER_COLORS.length].toString(16).padStart(6, '0');
+    return slotColor(this.slotOf(id));
   }
 
   private show(big: string, small = '', seconds = 2.5, color = '#fff') {
@@ -125,6 +133,7 @@ export class MatchHud {
     this.score.style.display = 'flex';
     let html = '';
     for (const p of view.players) {
+      if (p.left) continue;
       const id = p.id;
       const wins = m.wins[id] ?? 0;
       let pips = '';

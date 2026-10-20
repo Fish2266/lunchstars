@@ -143,6 +143,9 @@ export interface Fighter {
   /** Hits taken this life, for the debug HUD. */
   hitsTaken: number;
   mashPrev: boolean;
+  /** Latest aim, for the "in punch reach" flag in the view. */
+  lastAimYaw: number;
+  lastAimPitch: number;
 }
 
 // ---------------------------------------------------------------- state view (what clients see)
@@ -165,6 +168,10 @@ export interface PlayerView {
   stun: number;
   stagger: number;
   grounded: boolean;
+  /** A punch thrown now would land (drives the crosshair ring). */
+  inReach: boolean;
+  /** Left the game. */
+  left: boolean;
 }
 
 /**
@@ -265,6 +272,9 @@ export class Sim {
   private entityOfBody = new Map<number, number>();
   private events: SimEvent[] = [];
   private rngState = 0x1234567;
+  /** Players who have left (multiplayer): parked for good; their entities stay so indices never shift. */
+  readonly left = new Set<number>();
+  private dynamicCache: { version: number; indices: number[] } = { version: -1, indices: [] };
   /** Bumped whenever `entities` changes so the renderer knows to rebuild meshes. */
   entityVersion = 0;
   private nextVirtualId = -1;
@@ -306,11 +316,15 @@ export class Sim {
     this.fighters.set(id, {
       hands: [makeHand(), makeHand()], active: 1, cooldown: 0, prevFire: false, prevCycle: false,
       hitAccum: 0, hitDir: { x: 0, y: 0, z: 0 }, slot,
-      ko: 0, sinceHit: 99, koTimer: 0, koCount: 0, hitsTaken: 0, mashPrev: false,
+      ko: 0, sinceHit: 99, koTimer: 0, koCount: 0, hitsTaken: 0, mashPrev: false, lastAimYaw: 0, lastAimPitch: 0,
     });
     // Standing on the conveyor carries your planted feet along.
     r.surfaceVelocity = (p) => beltAt(p)?.vel ?? null;
-    if (this.match.phase !== 'practice') this.match.alive.add(id);
+    // Joining mid-round: you watch until the next round starts.
+    this.match.wins.set(id, this.match.wins.get(id) ?? 0);
+    const phase = this.match.phase;
+    if (phase === 'countdown') this.match.alive.add(id);
+    else if (phase !== 'practice') r.setActive(false);
     // Reaching hands pick guns up instead of latching onto them.
     r.ignoreGrab = (c) => this.loose.some((g) => g.active && g.collider.handle === c.handle);
     return r;
@@ -329,7 +343,7 @@ export class Sim {
 
   respawn(id: number) {
     const r = this.players.get(id);
-    if (!r) return;
+    if (!r || this.left.has(id)) return;
     const slot = this.fighters.get(id)!.slot;
     const s = this.spawns[slot % this.spawns.length];
     for (const other of this.players.values()) for (const b of r.bodyHandles) other.releaseIfAttachedTo(b);
@@ -363,6 +377,8 @@ export class Sim {
       if (!r.active) continue;
       const raw = inputs.get(id) ?? emptyInput();
       const f = this.fighters.get(id)!;
+      f.lastAimYaw = raw.aimYaw;
+      f.lastAimPitch = raw.aimPitch;
       this.updateKnockout(id, r, f, raw);
       // Knocked out: no control at all. Countdown: look around, but stay put.
       const input = f.koTimer > 0 ? { ...emptyInput(), aimYaw: r.yaw }
@@ -407,6 +423,25 @@ export class Sim {
     this.startRound();
   }
 
+  /** A player left (disconnected): drop everything, park the body for good, take them out of the round. */
+  removePlayer(id: number) {
+    const r = this.players.get(id);
+    if (!r || this.left.has(id)) return;
+    this.left.add(id);
+    for (const i of [0, 1] as const) this.dropItem(id, i, { x: 0, y: 1, z: 0 });
+    for (const other of this.players.values()) for (const b of r.bodyHandles) other.releaseIfAttachedTo(b);
+    this.match.alive.delete(id);
+    r.setActive(false);
+  }
+
+  /** Indices of entities that can move (everything except static level geometry): what snapshots carry. */
+  dynamicIndices(): number[] {
+    if (this.dynamicCache.version !== this.entityVersion) {
+      this.dynamicCache = { version: this.entityVersion, indices: this.entities.flatMap((e, i) => (e.role === 'static' ? [] : [i])) };
+    }
+    return this.dynamicCache.indices;
+  }
+
   /** Sandbox mode: no rounds, falling or burning just respawns you. */
   setPractice() {
     this.match.phase = 'practice';
@@ -418,7 +453,7 @@ export class Sim {
     m.round++;
     m.roundWinner = null;
     this.resetAll();
-    m.alive = new Set(this.players.keys());
+    m.alive = new Set([...this.players.keys()].filter((id) => !this.left.has(id)));
     m.phase = 'countdown';
     m.timer = 3;
     this.events.push({ type: 'countdown', round: m.round });
@@ -431,7 +466,7 @@ export class Sim {
     if (m.phase === 'countdown' && m.timer <= 0) {
       m.phase = 'playing';
       this.events.push({ type: 'roundStart', round: m.round });
-    } else if (m.phase === 'playing' && this.players.size >= 2 && m.alive.size <= 1) {
+    } else if (m.phase === 'playing' && this.players.size - this.left.size >= 2 && m.alive.size <= 1) {
       const winner = m.alive.size === 1 ? [...m.alive][0] : null;
       m.roundWinner = winner;
       if (winner !== null) m.wins.set(winner, (m.wins.get(winner) ?? 0) + 1);
@@ -1329,6 +1364,8 @@ export class Sim {
         activeHand: f.active,
         ko: f.ko, koThreshold: koThreshold(f), koTimer: f.koTimer, koCount: f.koCount, hitsTaken: f.hitsTaken,
         stiffness: r.stiffness, stun: r.stunTimer, stagger: r.staggerTimer, grounded: r.grounded,
+        inReach: r.active && f.koTimer === 0 && (!f.hands[0].item || !f.hands[1].item) && this.punchWouldHit(id, f.lastAimYaw, f.lastAimPitch),
+        left: this.left.has(id),
       });
     }
     return {

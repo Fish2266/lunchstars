@@ -12,8 +12,6 @@ export class Renderer {
   readonly gl: THREE.WebGLRenderer;
   /** One mesh per sim entity, same order as `sim.entities`. */
   meshes: THREE.Object3D[] = [];
-  /** Objects not tied to one entity (skinned bodies). */
-  private extra: THREE.Object3D[] = [];
   private faces = new Map<number, Face>();
   private bodies = new Map<number, THREE.Object3D>();
   /** Each player's bones in PARTS order (parents before children), for the twist clamp. */
@@ -113,19 +111,24 @@ export class Renderer {
 
   /** (Re)build meshes if the entity list changed. */
   /** Returns true if it rebuilt. */
+  /**
+   * Build meshes for entities added since the last call. The entity list only ever grows (players joining
+   * append their parts; nothing is removed mid-game), so this is incremental: existing meshes are kept.
+   * Returns true if anything was built.
+   */
   sync(entities: readonly EntityDesc[], version: number): boolean {
     if (version === this.builtVersion) return false;
-    for (const m of this.meshes) this.scene.remove(m);
-    for (const m of this.extra) this.scene.remove(m);
-    this.extra = [];
+    this.builtVersion = version;
+    if (entities.length <= this.meshes.length) return false;
     // Player body parts become bones of one skinned body per player (see body.ts).
     const bonesByPlayer = new Map<number, { bones: THREE.Bone[]; color: number }>();
-    const pickMat = new THREE.MeshBasicMaterial({ visible: false });
-    this.meshes = entities.map((e) => {
+    for (let i = this.meshes.length; i < entities.length; i++) {
+      const e = entities[i];
+      let obj: THREE.Object3D;
       if (e.role === 'player' && e.playerId !== undefined && e.model !== undefined && !isGunModel(e.model)) {
         const bone = new THREE.Bone();
         // Invisible copy of the collision shape, so the crosshair raycast can hit players.
-        bone.add(new THREE.Mesh(geometryFor(e.shape), pickMat));
+        bone.add(new THREE.Mesh(geometryFor(e.shape), PICK_MAT));
         if (e.model === 'head') {
           // Matches the head of the body bean (see body.ts), not the smaller physics ball.
           const face = buildFace(0.195);
@@ -135,35 +138,30 @@ export class Renderer {
         let entry = bonesByPlayer.get(e.playerId);
         if (!entry) { entry = { bones: [], color: e.color }; bonesByPlayer.set(e.playerId, entry); }
         entry.bones.push(bone);
-        this.scene.add(bone);
-        return bone;
+        obj = bone;
+      } else if (e.model) {
+        obj = buildModel(e);
+      } else {
+        // Textured level pieces get world-scale UVs; everything else the plain shape.
+        const mesh = e.surface && e.shape.kind === 'box'
+          ? new THREE.Mesh(worldBox(e.shape.hx, e.shape.hy, e.shape.hz, e.surface), surfaceMaterial(e.surface, e.color, e.emissive ?? 0))
+          : new THREE.Mesh(geometryFor(e.shape), materialFor(e));
+        mesh.castShadow = e.role !== 'static' || e.shape.kind !== 'box' || (e.shape as { hy: number }).hy > 0.05;
+        mesh.receiveShadow = true;
+        obj = mesh;
       }
-      if (e.model) {
-        const model = buildModel(e);
-        this.scene.add(model);
-        return model;
-      }
-      // Textured level pieces get world-scale UVs; everything else the plain shape.
-      const mesh = e.surface && e.shape.kind === 'box'
-        ? new THREE.Mesh(worldBox(e.shape.hx, e.shape.hy, e.shape.hz, e.surface), surfaceMaterial(e.surface, e.color, e.emissive ?? 0))
-        : new THREE.Mesh(geometryFor(e.shape), materialFor(e));
-      mesh.castShadow = e.role !== 'static' || e.shape.kind !== 'box' || (e.shape as { hy: number }).hy > 0.05;
-      mesh.receiveShadow = true;
-      if (e.role === 'static') mesh.matrixAutoUpdate = true;
-      this.scene.add(mesh);
-      return mesh;
-    });
-    this.bodies.clear();
-    this.skeletons = [...bonesByPlayer.values()].map((e) => e.bones);
+      this.scene.add(obj);
+      this.meshes.push(obj);
+    }
     for (const [pid, { bones, color }] of bonesByPlayer) {
       const body = buildBody(bones, gummy(color));
       this.scene.add(body);
-      this.extra.push(body);
       this.bodies.set(pid, body);
+      this.skeletons.push(bones);
     }
-    this.builtVersion = version;
     return true;
   }
+
 
   /** Apply a flat [px,py,pz,qx,qy,qz,qw]* array. */
   applyTransforms(t: Float32Array) {
@@ -234,6 +232,8 @@ function materialFor(e: EntityDesc): THREE.Material {
   }
   return m;
 }
+
+const PICK_MAT = new THREE.MeshBasicMaterial({ visible: false });
 
 function isGunModel(m: string) {
   return m === 'pistol' || m === 'shotgun' || m === 'grenade' || m === 'grenadeLive';

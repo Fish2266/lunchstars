@@ -1,8 +1,12 @@
-// Entry point: wires the pure simulation to input, rendering, effects and HUD.
+// Entry point: wires the pure simulation to input, rendering, effects, HUD and networking.
 //
-// Per frame: read input → step the sim at a fixed 60 Hz → take a GameView snapshot + body transforms →
-// feed events to effects/HUD → render. In multiplayer the middle part (stepping) happens on the host and
-// clients get the snapshot, transforms and events over the network instead.
+// Three ways to play, same presentation code for all of them:
+// - solo:   step the sim locally (you + a bot); the menu pauses it.
+// - host:   step the sim locally with everyone's inputs; send snapshots / view / events to the clients.
+//           The host never pauses — other people are playing.
+// - client: never step. A local copy of the sim exists only to know the level and the entity list; the
+//           world is drawn from the host's snapshots (interpolated), the HUD from the host's GameView.
+// Everything after the "world state" step below reads only the transforms, the view and the events.
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import { loadSettings } from './client/bindings';
@@ -12,7 +16,10 @@ import { Controls } from './client/controls';
 import { addGameFolders, createDebugPanel, loadSavedTuning } from './client/debug';
 import { Hud } from './client/hud';
 import { MatchHud } from './client/matchHud';
-import { Menu } from './client/menu';
+import { Menu, type MenuMode } from './client/menu';
+import { NetClient } from './net/client';
+import { NetHost } from './net/host';
+import type { RosterEntry } from './net/protocol';
 import { Effects } from './render/effects';
 import { PitFire } from './render/fire';
 import { Gore, goreSettings } from './render/gore';
@@ -20,35 +27,70 @@ import { animateModels } from './render/models';
 import { Renderer } from './render/renderer';
 import { INCINERATOR } from './sim/incinerator';
 import type { PlayerInput } from './sim/input';
-import { DT, Sim } from './sim/sim';
+import { DT, Sim, type GameView, type SimEvent, type V3 } from './sim/sim';
 import { tuning } from './sim/tuning';
 import { explosive, handling, punch, weapons } from './sim/weapons';
 
-const LOCAL_ID = 0;
-const DUMMY_ID = 1;
+const BOT_ID = 1;
 
 async function main() {
   await RAPIER.init();
   loadSavedTuning();
   loadSettings();
 
-  // ---------------------------------------------------------------- simulation
+  const renderer = new Renderer(document.body);
+  const controls = new Controls(renderer.gl.domElement);
+  const menu = new Menu(controls, renderer.gl.domElement);
+
+  // ---------------------------------------------------------------- session
+  // A ?join=CODE link connects straight away; otherwise we start on the title screen with a solo game ready.
   const sim = new Sim(RAPIER);
-  const me = sim.addPlayer(LOCAL_ID);
-  const dummy = sim.addPlayer(DUMMY_ID);
-  const bot = new Bot(sim, DUMMY_ID, LOCAL_ID);
-  bot.mode = 'chase + shoot';
+  const joinCode = new URLSearchParams(location.search).get('join')?.toUpperCase() ?? null;
+  let mode: Exclude<MenuMode, 'title'> = 'solo';
+  let localId = 0;
+  let host: NetHost | null = null;
+  let client: NetClient | null = null;
+  const bots = new Map<number, Bot>();
+  const roster: RosterEntry[] = [];
+
+  if (joinCode) {
+    menu.showStatus('Joining…', `Connecting to room ${joinCode}.`, false);
+    client = new NetClient();
+    try {
+      await client.connect(joinCode, 'Player');
+    } catch (e) {
+      menu.showStatus("Couldn't join", (e as Error).message ?? String(e));
+      return;
+    }
+    mode = 'client';
+    localId = client.you;
+    menu.mode = 'client';
+    // Mirror the host's players in the host's order so entity indices line up.
+    const mirror = (r: RosterEntry[]) => {
+      for (let i = sim.players.size; i < r.length; i++) sim.addPlayer(r[i].id);
+    };
+    mirror(client.roster);
+    client.onRoster = (r) => { mirror(r); updateLobby(); };
+    client.onClosed = (reason) => menu.showStatus('Disconnected', reason);
+  } else {
+    sim.addPlayer(0);
+    sim.addPlayer(BOT_ID);
+    const bot = new Bot(sim, BOT_ID, 0);
+    bot.mode = 'chase + shoot';
+    bots.set(BOT_ID, bot);
+    roster.push({ id: 0, name: 'Host', bot: false, left: false }, { id: BOT_ID, name: 'Bot', bot: true, left: false });
+  }
+  const firstBot = bots.get(BOT_ID) ?? new Bot(sim, -1, -1);
 
   // ---------------------------------------------------------------- presentation
-  const renderer = new Renderer(document.body);
   const cam = new CameraRig(renderer.camera);
-  const effects = new Effects(renderer.scene, LOCAL_ID);
+  const effects = new Effects(renderer.scene, localId);
   const groundRay = new THREE.Raycaster();
   const DOWN = new THREE.Vector3(0, -1, 0);
   const groundFrom = new THREE.Vector3();
   let staticMeshes: THREE.Object3D[] = [];
   /** Height of the level under a point (blood splats and casings land on it). */
-  const groundAt = (p: { x: number; y: number; z: number }) => {
+  const groundAt = (p: V3) => {
     groundRay.set(groundFrom.set(p.x, p.y + 0.05, p.z), DOWN);
     groundRay.far = 40;
     const hit = groundRay.intersectObjects(staticMeshes, false)[0];
@@ -56,34 +98,82 @@ async function main() {
   };
   const gore = new Gore(renderer.scene, groundAt);
   const pitFire = new PitFire(renderer.scene, INCINERATOR.pitCenter, INCINERATOR.pitHalf, -1.42);
-  const matchHud = new MatchHud(LOCAL_ID);
-  const hud = new Hud(LOCAL_ID, (id) => matchHud.nameOf(id));
+  const matchHud = new MatchHud(localId);
+  const hud = new Hud(localId, (id) => matchHud.nameOf(id));
   const crosshair = document.getElementById('crosshair')!;
   let hitMarkerTimer = 0;
 
-  // ---------------------------------------------------------------- input and menus
-  const controls = new Controls(renderer.gl.domElement);
-  const menu = new Menu(controls, renderer.gl.domElement);
-  // The match starts when Play is first pressed, not at page load.
-  menu.onFirstPlay = () => { sim.startMatch(); gore.clear(); };
+  // ---------------------------------------------------------------- menus and lobby
+  function updateLobby() {
+    const r = host ? host.roster : client ? client.roster : roster;
+    menu.lobby = {
+      code: host?.code ?? joinCode ?? '',
+      roster: r,
+      you: localId,
+      matchRunning: (client?.view?.match.phase ?? sim.match.phase) !== 'practice',
+      canAddBot: !!host?.hasRoom,
+    };
+    menu.refresh();
+  }
   menu.onBindingsChanged = () => hud.renderHelp();
+  menu.onSolo = () => { sim.startMatch(); gore.clear(); };
+  menu.onHost = async () => {
+    const h = new NetHost(sim, roster);
+    await h.open();
+    host = h;
+    mode = 'host';
+    h.onRosterChange = updateLobby;
+    // Mess around in practice until the host starts the match.
+    sim.setPractice();
+    gore.fadeAll();
+    updateLobby();
+  };
+  menu.onStartMatch = () => { sim.startMatch(); gore.fadeAll(); updateLobby(); };
+  menu.onAddBot = () => {
+    const id = host?.addBot('Bot');
+    if (id == null) return;
+    const b = new Bot(sim, id, localId);
+    b.mode = firstBot.mode === 'idle' ? 'chase + shoot' : firstBot.mode;
+    bots.set(id, b);
+  };
+  menu.onRemoveBot = (id) => { host?.removeBot(id); bots.delete(id); };
+  if (mode === 'client') { updateLobby(); menu.showPause(); }
+  addEventListener('beforeunload', () => { host?.close(); client?.close(); });
 
   // ---------------------------------------------------------------- debug panel
-  const stats = { fps: 0, stiffness: 1, grounded: '' };
+  const stats = { fps: 0, stiffness: 1, grounded: '', net: '' };
   const shoveDummy = () => {
-    const p = dummy.chest.translation();
-    const m = me.chest.translation();
+    if (mode === 'client') return;
+    const me = sim.players.get(localId), dummy = [...bots.keys()].map((id) => sim.players.get(id)).find((r) => r?.active);
+    if (!me || !dummy) return;
+    const p = dummy.chest.translation(), m = me.chest.translation();
     const d = new THREE.Vector3(p.x - m.x, 0, p.z - m.z).normalize();
     sim.hitscan(undefined, { x: p.x - d.x * 2, y: p.y, z: p.z - d.z * 2 }, { x: d.x, y: 0, z: d.z }, 4, tuning.shoveImpulse, 1);
   };
-  const gui = createDebugPanel({ shoveDummy, reset: () => sim.resetAll(), stats });
+  const gui = createDebugPanel({ shoveDummy, reset: () => { if (mode !== 'client') sim.resetAll(); }, stats });
   addGameFolders(gui, {
-    weapons, explosive, punch, handling, goreSettings, bot, hud,
-    giveMe: (kind) => sim.giveWeapon(LOCAL_ID, kind, 1),
-    giveDummy: () => sim.giveWeapon(DUMMY_ID, 'pistol', 1),
-    setPractice: (on) => { if (on) sim.setPractice(); else sim.startMatch(); gore.fadeAll(); },
+    weapons, explosive, punch, handling, goreSettings, bot: firstBot, hud,
+    giveMe: (kind) => sim.giveWeapon(localId, kind, 1),
+    giveDummy: () => sim.giveWeapon(BOT_ID, 'pistol', 1),
+    setPractice: (on) => { if (mode === 'client') return; if (on) sim.setPractice(); else sim.startMatch(); gore.fadeAll(); updateLobby(); },
     mopFloor: () => gore.clear(),
   });
+
+  // ---------------------------------------------------------------- body positions from the transforms
+  // (The same on host and client: nothing below touches ragdolls.)
+  const transforms = new Float32Array(4096 * 7);
+  let chestEntity = new Map<number, number>();
+  const chestPos = (id: number): V3 | null => {
+    const i = chestEntity.get(id);
+    if (i === undefined) return null;
+    const y = transforms[i * 7 + 1];
+    return y < -500 ? null : { x: transforms[i * 7], y, z: transforms[i * 7 + 2] };
+  };
+  /** Where shots come from and the camera looks from: just above the chest (matches `Ragdoll.aimOrigin`). */
+  const aimOrigin = (id: number): V3 | null => {
+    const c = chestPos(id);
+    return c ? { x: c.x, y: c.y + 0.35, z: c.z } : null;
+  };
 
   // ---------------------------------------------------------------- crosshair aiming
   // The over-the-shoulder camera's crosshair ray and the character's aim line differ, so find what the
@@ -98,7 +188,8 @@ async function main() {
     aimRay.far = 80;
     const hit = aimRay.intersectObjects(pickList.filter((m) => m.visible), true)[0];
     aimPoint.copy(renderer.camera.position).addScaledVector(camFwd, hit ? hit.distance : 80);
-    const o = me.aimOrigin();
+    const o = aimOrigin(localId);
+    if (!o) return;
     const dx = aimPoint.x - o.x, dy = aimPoint.y - o.y, dz = aimPoint.z - o.z;
     const h = Math.hypot(dx, dz);
     // Only when the crosshair is practically on top of us is the angle unstable; then use the camera direction.
@@ -108,71 +199,117 @@ async function main() {
     }
   }
 
-  /** Rebuild the raycast lists after the renderer (re)creates its meshes. */
+  /** Refresh the raycast lists and lookups after the renderer adds meshes (startup, someone joined). */
   function onSceneBuilt() {
     staticMeshes = renderer.meshes.filter((_, i) => sim.entities[i].role === 'static');
     pickList = renderer.meshes.filter((_, i) => {
       const e = sim.entities[i];
-      return e.role !== 'fx' && !(e.role === 'player' && e.playerId === LOCAL_ID);
+      return e.role !== 'fx' && !(e.role === 'player' && e.playerId === localId);
     });
     // Thin floor stencils and signs don't stop the camera; presses do.
     cam.blockers = renderer.meshes.filter((_, i) => {
       const e = sim.entities[i];
       return (e.role === 'static' && e.model !== 'sign') || e.model === 'stamper';
     });
+    chestEntity = new Map();
+    sim.entities.forEach((e, i) => { if (e.model === 'torso' && e.playerId !== undefined) chestEntity.set(e.playerId, i); });
+    // A client never steps its sim: this puts the level (and anything not yet in a snapshot) in place.
+    if (mode === 'client') sim.writeTransforms(transforms);
   }
 
-  // ---------------------------------------------------------------- frame loop
+  // ---------------------------------------------------------------- simulation (solo / host)
   const inputs = new Map<number, PlayerInput>();
-  const transforms = new Float32Array(4096 * 7);
+  let myInput: PlayerInput = controls.read();
   let acc = 0;
+  let lastSim = performance.now();
+  let frameEvents: SimEvent[] = [];
+
+  /** Step the sim up to `now`. Called every frame, and on a timer while a host's tab is in the background. */
+  function simulate(now: number, maxCatchUp: number) {
+    const realDt = Math.min(maxCatchUp, (now - lastSim) / 1000);
+    lastSim = now;
+    if (mode === 'client') return;
+    // A beat of slow motion when someone is eliminated (solo only: online, everyone shares the host's clock).
+    const dt = realDt * (mode === 'solo' && matchHud.slowmo > 0 ? 0.3 : 1);
+    inputs.set(localId, myInput);
+    for (const [id, b] of bots) inputs.set(id, b.think(dt));
+    if (host) for (const [id, inp] of host.remoteInputs()) inputs.set(id, inp);
+    // Solo: nothing runs behind the menu. Online: the game goes on.
+    if (mode === 'solo' && menu.open) acc = 0; else acc += dt;
+    let stepped = false;
+    while (acc >= DT) {
+      sim.step(inputs);
+      acc -= DT;
+      stepped = true;
+    }
+    if (!stepped) return;
+    const events = sim.drainEvents();
+    frameEvents.push(...events);
+    if (host) {
+      sim.writeTransforms(transforms);
+      host.queueEvents(events);
+      host.broadcast(transforms);
+    }
+  }
+  // Browsers stop animation frames in background tabs; a host must keep the game running for everyone else.
+  setInterval(() => {
+    if (mode === 'host' && document.hidden) { simulate(performance.now(), 1); frameEvents = frameEvents.slice(-200); }
+  }, 50);
+
+  // ---------------------------------------------------------------- frame loop
   let last = performance.now();
   let fpsFrames = 0, fpsTime = 0;
+  let lastView: GameView | null = null;
 
   function frame(now: number) {
     const realDt = Math.min(0.1, (now - last) / 1000);
     last = now;
-    // A beat of slow motion when someone is eliminated.
     matchHud.slowmo = Math.max(0, matchHud.slowmo - realDt);
-    const frameDt = realDt * (matchHud.slowmo > 0 ? 0.3 : 1);
+    const frameDt = realDt * (mode === 'solo' && matchHud.slowmo > 0 ? 0.3 : 1);
 
-    // Debug / match keys.
-    if (controls.consume('reset')) {
+    // Match / debug keys (the host runs the match).
+    const authority = mode !== 'client';
+    if (controls.consume('reset') && authority) {
       if (sim.match.phase === 'practice') sim.resetAll(); else sim.startMatch();
       gore.fadeAll();
     }
-    if (sim.match.phase === 'matchOver' && controls.consume('jump')) sim.startMatch(); // rematch
+    if (authority && sim.match.phase === 'matchOver' && controls.consume('jump')) sim.startMatch(); // rematch
     if (controls.consume('shoveDummy')) shoveDummy();
     if (controls.consume('panel')) gui.show(gui._hidden);
 
-    // Simulate (fixed 60 Hz). Nothing runs behind the menu: before the first Play, or while paused.
-    // (Single-player only — a multiplayer host keeps simulating.)
-    const myInput = controls.read();
+    myInput = controls.read();
     crosshairAim(myInput);
-    inputs.set(LOCAL_ID, myInput);
-    inputs.set(DUMMY_ID, bot.think(frameDt));
-    if (menu.open) acc = 0; else acc += frameDt;
-    while (acc >= DT) {
-      sim.step(inputs);
-      acc -= DT;
-    }
+    if (mode === 'client') client!.sendInput(myInput);
+    else simulate(now, 0.1);
     controls.endFrame();
 
-    // Snapshot: everything below reads only this, the transforms and the events.
+    // World state: transforms, view and events, from the sim or from the network.
     if (renderer.sync(sim.entities, sim.entityVersion)) onSceneBuilt();
-    sim.writeTransforms(transforms);
-    const view = sim.view();
+    let view: GameView | null;
+    let events: SimEvent[];
+    if (mode === 'client') {
+      client!.interpolate(transforms, sim.dynamicIndices());
+      view = client!.view;
+      events = client!.drainEvents();
+    } else {
+      sim.writeTransforms(transforms);
+      view = sim.view();
+      events = frameEvents;
+      frameEvents = [];
+    }
+    if (view && lastView && view.match.phase !== lastView.match.phase && (view.match.phase === 'practice' || lastView.match.phase === 'practice')) updateLobby();
+    lastView = view;
 
-    for (const e of sim.drainEvents()) {
+    for (const e of events) {
       effects.handle(e);
       matchHud.handle(e);
       if (e.type === 'countdown') gore.fadeAll();
       if (e.type === 'hit') {
         gore.wound(e, transforms);
-        if (e.by === LOCAL_ID && e.player !== LOCAL_ID) hitMarkerTimer = 0.15;
+        if (e.by === localId && e.player !== localId) hitMarkerTimer = 0.15;
       } else if (e.type === 'shot' && e.first) {
         gore.casing(e.from, e.dir, e.weapon === 'shotgun');
-        if (e.player === LOCAL_ID) {
+        if (e.player === localId) {
           // Recoil climbs your aim a little; you pull it back down.
           controls.pitch = Math.min(1.0, controls.pitch + weapons[e.weapon].camKick);
           controls.yaw += (Math.random() - 0.5) * weapons[e.weapon].camKick * 0.5;
@@ -181,44 +318,52 @@ async function main() {
     }
 
     // World presentation.
-    effects.update(frameDt, transforms, { state: view.furnace, center: INCINERATOR.pitCenter, half: INCINERATOR.pitHalf });
+    const furnace = view?.furnace ?? 'idle';
+    effects.update(frameDt, transforms, { state: furnace, center: INCINERATOR.pitCenter, half: INCINERATOR.pitHalf });
     gore.update(frameDt, transforms);
-    pitFire.update(now / 1000, realDt, renderer.camera, view.furnace);
-    renderer.setFurnace(view.furnace);
-    renderer.setStampers(view.stampers);
-    for (const p of view.players) renderer.setKnockedOut(p.id, p.koTimer > 0);
+    pitFire.update(now / 1000, realDt, renderer.camera, furnace);
+    renderer.setFurnace(furnace);
+    if (view) {
+      renderer.setStampers(view.stampers);
+      for (const p of view.players) renderer.setKnockedOut(p.id, p.koTimer > 0);
+    }
     animateModels(now / 1000);
     renderer.applyTransforms(transforms);
 
     // Camera: follow yourself, or whoever's left once you're out.
-    const follow = me.active ? me.aimOrigin() : ([...sim.players.values()].find((p) => p.active)?.aimOrigin() ?? { x: 0, y: 1.6, z: 1 });
-    cam.update(follow, controls.yaw, controls.pitch, effects.shake, frameDt, realDt);
+    const meView = view?.players.find((p) => p.id === localId);
+    let follow = meView?.active ? aimOrigin(localId) : null;
+    if (!follow && view) for (const p of view.players) if (p.active && !p.left && (follow = aimOrigin(p.id))) break;
+    cam.update(follow ?? { x: 0, y: 1.6, z: 1 }, controls.yaw, controls.pitch, effects.shake, frameDt, realDt);
     // Squeezed right up against your own character (a wall or ceiling behind you): don't fill the screen with it.
-    renderer.setPlayerHidden(LOCAL_ID, cam.distance < 1.0);
+    renderer.setPlayerHidden(localId, cam.distance < 1.0);
     renderer.focusShadow(cam.pivot);
     renderer.render();
 
     // HUD.
     hitMarkerTimer = Math.max(0, hitMarkerTimer - frameDt);
     crosshair.classList.toggle('hit', hitMarkerTimer > 0);
-    const meView = view.players.find((p) => p.id === LOCAL_ID)!;
-    const freeHand = !meView.hands[0].item || !meView.hands[1].item;
     // In punching reach (and a hand free to punch with): the crosshair turns into a ring.
-    crosshair.classList.toggle('reach', freeHand && meView.koTimer === 0 && sim.punchWouldHit(LOCAL_ID, myInput.aimYaw, myInput.aimPitch));
-    matchHud.update(view, realDt);
-    hud.update(view, (p) => (p.id === DUMMY_ID ? `bot: ${bot.state}` : ''));
+    crosshair.classList.toggle('reach', !!meView?.inReach);
+    if (view) {
+      matchHud.update(view, realDt);
+      hud.update(view, (p) => { const b = bots.get(p.id); return b ? `bot: ${b.state}` : ''; });
+    }
 
     fpsFrames++; fpsTime += realDt;
     if (fpsTime > 0.5) { stats.fps = Math.round(fpsFrames / fpsTime); fpsFrames = 0; fpsTime = 0; }
-    stats.stiffness = Math.round(meView.stiffness * 100) / 100;
-    stats.grounded = `${meView.grounded ? 'yes' : 'no'} / dummy ${dummy.stiffness.toFixed(2)}`;
+    if (meView) {
+      stats.stiffness = Math.round(meView.stiffness * 100) / 100;
+      stats.grounded = meView.grounded ? 'yes' : 'no';
+    }
+    stats.net = mode === 'client' ? `client · ${client!.bufferedTicks.toFixed(1)} ticks buffered · host ${client!.hostTickRate.toFixed(0)} Hz` : mode === 'host' ? `host · room ${host!.code}` : 'solo';
 
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
 
   // Exposed for debugging in the console.
-  Object.assign(window, { sim, tuning, weapons, explosive, bot, effects, gore, goreSettings, handling, hud, renderer, controls });
+  Object.assign(window, { sim, tuning, weapons, explosive, bots, effects, gore, goreSettings, handling, hud, renderer, controls, net: () => ({ mode, host, client }) });
 }
 
 main();

@@ -11,7 +11,7 @@ Work one phase at a time. A phase is done only when its "done when" is true. Com
 | 2 | Walk cycle, jump, hand grabbing, 3rd-person camera | You can wrestle a physics crate around | ✅ first pass — lifting heavy things is weak |
 | 3 | Guns: aim, hitscan/projectiles, knockback, stun, pickups | Shooting someone off a ledge feels great | ✅ first pass — needs real-player feel test |
 | 4 | Hazards, elimination, rounds, scoreboard (Incinerator map) | Full local match vs dummy / 2nd keyboard | ✅ first pass |
-| 5 | PeerJS lobby, host-authoritative sim, snapshots + interpolation | Two browsers on different networks play a full match | next |
+| 5 | PeerJS lobby, host-authoritative sim, snapshots + interpolation | Two browsers on different networks play a full match | ✅ first pass — tested in two tabs on one machine; needs a real cross-network match |
 | 6 | Polish: juice, toon look, customization, audio, settings, perf | 60 FPS on a mid laptop and it feels great | |
 | 7 | (optional) Dedicated Node/Colyseus server | 6–8 players, no host advantage | |
 
@@ -19,6 +19,13 @@ Work one phase at a time. A phase is done only when its "done when" is true. Com
 - Weapons v1: pistol (light knockback), shotgun (huge, short range), grenade/rocket (chaos).
 - Maps v1: "Cafeteria" (floating floor over a pit) + one more.
 - Mode: last one standing, best of 5.
+
+## Phase 5: online play (done, first pass)
+- Title screen: Play solo / Host a game / Join with a 4-letter code. Hosting opens room `lunchstars-CODE` on the public PeerJS broker; the invite link is `?join=CODE`.
+- Host lobby: player list, add/remove bots, start or restart the match. Before the match starts everyone messes around in practice. The game never pauses for the host.
+- Up to 4 players at once. A player who joins mid-round watches until the next round; one who leaves (or goes silent for 6 s) is parked for good.
+- Tested in two tabs: host at 60 ticks/s, snapshots at 20 Hz, ~5 ticks of buffer on the client, client input moves the client's player, taps register exactly once, mid-round join, client leaving, host leaving.
+- Not yet: a real match across two networks (some NATs need a TURN server — PeerJS only ships STUN), latency feel at 100+ ms, client-side prediction for your own body (currently your own character is ~100 ms behind your input).
 
 ## Phase 3 (done, first pass)
 - Pistol (12 ammo, light knockback), shotgun (6 ammo, 8 pellets, launches), grenade (3, 1.8 s fuse, launches anyone within 3.8 m).

@@ -32,10 +32,10 @@ Nothing here is a frame-rate problem on a desktop. The GPU cost on weaker laptop
 
 Ordered by when it matters.
 
-1. **Incremental scene updates.** `Renderer.sync` rebuilds every mesh whenever the entity list changes and doesn't dispose the old ones. Single-player only builds once, but in multiplayer a player joining adds entities mid-game → a hitch and a leak. Needs add/remove per entity.
-2. **Snapshot only what moves.** `writeTransforms` writes all ~230 entities (7 floats each = 6.4 KB). Static level pieces never move: send them once. Dynamic entities (~80 with 2 players) quantized (int16 positions, smallest-three quaternions) are ~0.8 KB → ~16 KB/s at 20 Hz.
-3. **Client-side reads of the sim that remain.** Aim origin and camera follow read ragdoll bodies; the punch-reach ring calls `sim.punchWouldHit`. On a client these must come from received transforms (aim origin = chest + 0.35 m) or a host flag in the view.
-4. **Tuning is a global mutable singleton.** The host's values must win; the tuning panel should be host-only (or read-only) in multiplayer.
+1. ~~**Incremental scene updates.**~~ Done (Phase 5): `Renderer.sync` only builds entities it hasn't seen; entities are never removed (players who leave are parked), so nothing needs disposing.
+2. ~~**Snapshot only what moves.**~~ Done: snapshots carry only `sim.dynamicIndices()` (~100 entities with 3 players), 14 bytes each (int16 positions, int16 quaternion components — smallest-three wasn't worth it) → ~1.4 KB per snapshot. Sent every 3 ticks.
+3. ~~**Client-side reads of the sim.**~~ Done: aim origin and camera follow come from the transforms array; the reach ring is `PlayerView.inReach`.
+4. **Tuning is a global mutable singleton.** Mostly moot now — clients never step physics, so only the host's tuning matters. The panel still shows on clients and its sim buttons do nothing there.
 5. **Bundle size.** Switch to the non-compat `@dimforge/rapier3d` (separate, streamed `.wasm`) or at least split Rapier and Three into their own cached chunk; host with compression (Cloudflare Pages / Netlify do this).
 6. **Optional: batch static geometry.** Merging static boxes by material would cut ~140 draw calls. Not needed at current numbers.
 7. **Naming.** The pit flare still lives in `Sim.furnace` / `furnace` events from the old furnace map — rename to `flare` when convenient.

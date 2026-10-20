@@ -1,6 +1,8 @@
 // Pause card + settings screen with key remapping. Plain DOM, no framework.
 import { ACTIONS, bind, codeName, DEFAULT_BINDINGS, saveSettings, settings, type Action } from './bindings';
 import type { Controls } from './controls';
+import { slotColor, slotName } from './matchHud';
+import type { RosterEntry } from '../net/protocol';
 
 const CSS = `
 #menu { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 20;
@@ -21,17 +23,53 @@ const CSS = `
 #menu .slider input[type=range] { flex: 1; }
 #menu .footer { display: flex; gap: 8px; margin-top: 14px; }
 #menu .footer button { flex: 1; }
-#menu .hint { font-size: 12px; color: #8f98c8; margin-top: 10px; }
+#menu .hint { font-size: 12px; color: #8f98c8; margin-top: 10px; word-break: break-all; }
+#menu .join { display: flex; gap: 8px; margin-top: 8px; }
+#menu .join input { flex: 1; min-width: 0; font: 800 18px system-ui, sans-serif; letter-spacing: 0.3em; text-transform: uppercase;
+  text-align: center; border: 0; border-radius: 10px; padding: 8px; background: #fff; color: #1f2440; }
+#menu .join button { width: auto; margin: 0; padding: 10px 18px; }
+#menu .error { color: #ff8a8a; font-size: 13px; min-height: 0; margin-top: 6px; }
+#menu .room { display: flex; align-items: center; gap: 12px; font-size: 18px; margin-top: 8px; }
+#menu .room b { font-size: 30px; letter-spacing: 0.2em; color: #ffd54a; }
+#menu .room .key { padding: 7px 12px; }
+#menu .player { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 15px; }
+#menu .player i { width: 14px; height: 14px; border-radius: 50%; }
+#menu .player span { flex: 1; }
+#menu .player .key { padding: 4px 10px; }
+#menu button:disabled { opacity: 0.6; cursor: default; }
 `;
+
+function escapeHtml(s: string) {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+}
+
+/** What the pause card shows: the title screen, or the room you're in. */
+export type MenuMode = 'title' | 'solo' | 'host' | 'client';
+
+/** The room, for the lobby card. */
+export interface Lobby {
+  code: string;
+  roster: RosterEntry[];
+  you: number;
+  /** Match underway (vs. messing around in practice before the host starts). */
+  matchRunning: boolean;
+  canAddBot: boolean;
+}
 
 export class Menu {
   private root: HTMLDivElement;
   private listening: { action: Action; slot: 0 | 1; el: HTMLButtonElement } | null = null;
+  private screen: 'pause' | 'settings' | 'status' = 'pause';
   /** True once the player has clicked "Play" at least once (pointer lock may be unavailable). */
   playing = false;
+  mode: MenuMode = 'title';
+  lobby: Lobby | null = null;
   onBindingsChanged: () => void = () => {};
-  /** Called once, the first time Play is pressed (the match starts then, not at page load). */
-  onFirstPlay: () => void = () => {};
+  onSolo: () => void = () => {};
+  onHost: () => Promise<void> = async () => {};
+  onStartMatch: () => void = () => {};
+  onAddBot: () => void = () => {};
+  onRemoveBot: (id: number) => void = () => {};
 
   constructor(private readonly controls: Controls, private readonly canvas: HTMLCanvasElement) {
     const style = document.createElement('style');
@@ -62,23 +100,127 @@ export class Menu {
     return !this.root.classList.contains('hidden');
   }
 
-  showPause() {
+  private openCard() {
     this.controls.suspended = true;
     this.controls.releaseAll();
     this.root.classList.remove('hidden');
+  }
+
+  private on(sel: string, fn: () => void) {
+    const el = this.root.querySelector<HTMLElement>(sel);
+    if (el) el.onclick = fn;
+  }
+
+  showPause() {
+    this.openCard();
+    this.screen = 'pause';
+    const settingsBtn = `<button class="plain" data-settings>Controls &amp; settings</button>`;
+    if (this.mode === 'title') {
+      const code = new URLSearchParams(location.search).get('join') ?? '';
+      this.root.innerHTML = `
+        <div class="card">
+          <h1>LUNCH STARS</h1>
+          <button class="big" data-solo>Play solo</button>
+          <h2>Online</h2>
+          <button class="plain" data-host>Host a game</button>
+          <div class="join"><input data-code maxlength="4" placeholder="CODE" value="${escapeHtml(code)}" spellcheck="false" autocomplete="off">
+            <button class="plain" data-join>Join</button></div>
+          <div class="error" data-error></div>
+          ${settingsBtn}
+          <div class="hint">Press Esc any time to come back here.</div>
+        </div>`;
+      const input = this.root.querySelector<HTMLInputElement>('[data-code]')!;
+      input.oninput = () => { input.value = input.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); };
+      input.onkeydown = (e) => { if (e.key === 'Enter') join(); };
+      const join = () => {
+        if (input.value.length !== 4) { this.error('Room codes are 4 letters.'); return; }
+        location.search = `?join=${input.value}`;
+      };
+      this.on('[data-solo]', () => { this.mode = 'solo'; this.onSolo(); this.play(); });
+      this.on('[data-host]', () => this.host());
+      this.on('[data-join]', join);
+    } else if (this.mode === 'solo') {
+      this.root.innerHTML = `
+        <div class="card">
+          <h1>LUNCH STARS</h1>
+          <button class="big" data-play>Resume</button>
+          <button class="plain" data-host>Host this as an online game</button>
+          ${settingsBtn}
+          <div class="error" data-error></div>
+          <div class="hint">Press Esc any time to come back here.</div>
+        </div>`;
+      this.on('[data-play]', () => this.play());
+      this.on('[data-host]', () => this.host());
+    } else {
+      const l = this.lobby;
+      const isHost = this.mode === 'host';
+      const link = l ? `${location.origin}${location.pathname}?join=${l.code}` : '';
+      const players = l ? l.roster.map((r, slot) => (r.left ? '' : `
+        <div class="player"><i style="background:${slotColor(slot)}"></i>
+          <span>${slotName(slot)}${r.id === l.you ? ' (you)' : ''}${r.bot ? ' · bot' : ''}${slot === 0 ? ' · host' : ''}</span>
+          ${isHost && r.bot ? `<button class="key" data-kick="${r.id}">Remove</button>` : ''}</div>`)).join('') : '';
+      this.root.innerHTML = `
+        <div class="card">
+          <h1>LUNCH STARS</h1>
+          ${l ? `<div class="room">Room <b>${l.code}</b>
+            <button class="key" data-copy>Copy invite link</button></div>
+            <div class="hint" style="margin-top:2px">${escapeHtml(link)}</div>` : ''}
+          <h2>Players</h2>
+          ${players}
+          ${isHost && l?.canAddBot ? `<button class="plain" data-bot>Add a bot</button>` : ''}
+          ${isHost ? `<button class="big" data-start>${l?.matchRunning ? 'Restart match' : 'Start match'}</button>` : ''}
+          <button class="${isHost ? 'plain' : 'big'}" data-play>${this.playing ? 'Resume' : isHost ? 'Practice while people join' : 'Play'}</button>
+          ${settingsBtn}
+          <button class="plain" data-leave>${isHost ? 'Close room' : 'Leave game'}</button>
+          <div class="hint">${isHost ? 'The game keeps running while this menu is open.' : 'The host starts the match. The game keeps running while this menu is open.'}</div>
+        </div>`;
+      this.on('[data-copy]', () => navigator.clipboard?.writeText(link).catch(() => {}));
+      this.on('[data-bot]', () => this.onAddBot());
+      this.on('[data-start]', () => { this.onStartMatch(); this.play(); });
+      this.on('[data-play]', () => this.play());
+      this.on('[data-leave]', () => { location.href = location.pathname; });
+      for (const el of this.root.querySelectorAll<HTMLButtonElement>('[data-kick]')) el.onclick = () => this.onRemoveBot(Number(el.dataset.kick));
+    }
+    this.on('[data-settings]', () => this.showSettings());
+  }
+
+  /** Re-draw the lobby card if it's showing (someone joined or left). */
+  refresh() {
+    if (this.open && this.screen === 'pause' && (this.mode === 'host' || this.mode === 'client')) this.showPause();
+  }
+
+  /** A message card (connecting, disconnected, errors) with a way back to the title screen. */
+  showStatus(title: string, message: string, backButton = true) {
+    this.openCard();
+    this.screen = 'status';
     this.root.innerHTML = `
       <div class="card">
-        <h1>LUNCH STARS</h1>
-        <button class="big" data-play>Click to play</button>
-        <button class="plain" data-settings>Controls &amp; settings</button>
-        <div class="hint">Press Esc any time to come back here.</div>
+        <h1>${escapeHtml(title)}</h1>
+        <p>${escapeHtml(message)}</p>
+        ${backButton ? `<button class="big" data-back>Back to the title screen</button>` : ''}
       </div>`;
-    this.root.querySelector<HTMLButtonElement>('[data-play]')!.onclick = () => this.play();
-    this.root.querySelector<HTMLButtonElement>('[data-settings]')!.onclick = () => this.showSettings();
+    this.on('[data-back]', () => { location.href = location.pathname; });
+  }
+
+  private async host() {
+    const btn = this.root.querySelector<HTMLButtonElement>('[data-host]');
+    if (btn) { btn.disabled = true; btn.textContent = 'Opening a room…'; }
+    try {
+      await this.onHost();
+      this.mode = 'host';
+      this.showPause();
+    } catch (e) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Host a game'; }
+      this.error(`Couldn't open a room: ${(e as Error).message ?? e}`);
+    }
+  }
+
+  private error(msg: string) {
+    const el = this.root.querySelector('[data-error]');
+    if (el) el.textContent = msg;
   }
 
   play() {
-    if (!this.playing) this.onFirstPlay();
     this.playing = true;
     this.root.classList.add('hidden');
     this.controls.suspended = false;
@@ -87,6 +229,7 @@ export class Menu {
 
   showSettings() {
     this.listening = null;
+    this.screen = 'settings';
     const groups = [...new Set(ACTIONS.map((a) => a.group))];
     this.root.innerHTML = `
       <div class="card">

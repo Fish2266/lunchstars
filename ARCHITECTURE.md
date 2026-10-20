@@ -21,13 +21,34 @@ src/
               (score pips, banners, kill feed, slow-mo), hud.ts (hand slots, help, debug HUD), camera.ts
               (third-person rig, no clipping), debug.ts (lil-gui tuning panel),
               bot (makes PlayerInput like a human)
-  main.ts     Wires it together: input -> sim.step (fixed 60 Hz) -> transforms -> render
+  net/        Online play (PeerJS, host-authoritative)
+    protocol.ts Pure wire format: reliable JSON messages, 14-byte-per-entity binary snapshots, 22-byte inputs
+    host.ts     NetHost: room code, roster, input intake, broadcasts snapshots / view / events, timeouts
+    client.ts   NetClient: sends inputs (taps held a few sends), buffers snapshots, interpolates ~100 ms behind
+  main.ts     Wires it together: input -> sim.step (fixed 60 Hz) -> transforms -> render, in solo / host / client mode
 ```
+
+## Networking
+- **The host runs the only real sim.** Clients send `PlayerInput` every frame (unreliable, binary) and never step physics.
+- **Clients still build a `Sim`**, never stepped: it builds the same level from the same code and adds players in the
+  host's roster order, so entity indices match the host's without describing entities on the wire. Static level
+  transforms come from it once; everything else comes from snapshots.
+- **Two channels per client:** reliable JSON (hello/welcome, roster, `GameView` at 10 Hz, `SimEvent`s as they
+  happen) and unreliable binary (snapshots host → client every 3 ticks, inputs client → host).
+- **Snapshots carry only dynamic entities** (`sim.dynamicIndices()`): position as int16 × 500 (2 mm steps), quaternion
+  as int16 × 32767. ~100 entities with 3 players ≈ 1.4 KB per snapshot ≈ 28 KB/s per client.
+- **Interpolation:** the client draws `INTERP_DELAY` (6 ticks) behind the newest snapshot, advancing at the host's
+  measured tick rate and nudging to hold that buffer, so a slow or stuttering host doesn't make it run out.
+- **Players never disappear from the entity list.** Leaving parks the ragdoll (`sim.removePlayer`), so indices
+  never shift. A room allows 4 present at once and 12 ever (collision groups).
+- **Hosts in a background tab** keep simulating on a timer (browsers stop animation frames there).
+- Everything the HUD shows comes from `GameView` — e.g. the punch-reach ring is `PlayerView.inReach`, computed by
+  the host — and camera/aim positions come from the transforms array (chest + 0.35 m), never from ragdolls.
 
 ## Rules
 1. **`src/sim` stays pure.** It may import Rapier and Three's *math* classes (Vector3/Quaternion), nothing else from Three, and never `window`/`document`. That lets the same sim run in single-player, on the multiplayer host, or on a Node server.
 2. **Inputs in, state out.** Besides transforms, `sim.view()` returns a plain `GameView` (match, hazards, per-player hands/grips/KO) — the HUD and renderer read only that, the transforms and events, so a multiplayer client can be fed the same data from the host.
-2b. **Inputs in, state out (transforms).** `sim.step(Map<playerId, PlayerInput>)` is the only way to drive players. `sim.writeTransforms(Float32Array)` (7 floats per entity: pos + quat) is the only way the renderer reads state. That array is also the network snapshot format in Phase 5.
+2b. **Inputs in, state out (transforms).** `sim.step(Map<playerId, PlayerInput>)` is the only way to drive players. `sim.writeTransforms(Float32Array)` (7 floats per entity: pos + quat) is the only way the renderer reads state. Snapshots are that array's dynamic entries, quantized.
 3. **Fixed timestep.** Physics always steps at `DT = 1/60`; the client uses an accumulator.
 4. **Effects come from events.** The sim pushes `SimEvent`s (shot, hit, explosion, pickup…); the client drains them with `sim.drainEvents()`. In multiplayer these become the reliable channel.
 5. **Hidden entities** (inactive grenades, held guns not in hand, taken pickups) are parked at `HIDDEN_Y`; the renderer hides anything below -500. Entity lists never shrink mid-game, so snapshot indices stay stable.
