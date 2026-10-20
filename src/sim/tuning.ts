@@ -9,6 +9,10 @@ export const tuning = {
   limbKd: 28,
   // Multiplier on limb gains for arms that are aiming or reaching.
   aimGain: 2.5,
+  // Max angular acceleration multiplier for reaching / aiming / punching arms.
+  armSnap: 4,
+  // Fist speed (m/s) at the start of a punch.
+  punchSpeed: 9,
   // Cap on controller angular acceleration, prevents explosions when far from the target.
   maxAngAccel: 900,
 

@@ -12,7 +12,7 @@ export type PartName =
   | 'thighL' | 'shinL' | 'thighR' | 'shinR'
   | 'upperArmL' | 'forearmL' | 'upperArmR' | 'forearmR';
 
-interface PartDef {
+export interface PartDef {
   name: PartName;
   shape: ShapeDesc;
   /** Center offset from the pelvis center in the rest pose. */
@@ -21,9 +21,10 @@ interface PartDef {
 }
 
 // Rest pose: standing straight, arms hanging, facing +Z. Pelvis center sits at `standHeight`.
-const ARM_X = 0.27;
-const HIP_X = 0.1;
-const PARTS: PartDef[] = [
+export const ARM_X = 0.27;
+export const HIP_X = 0.1;
+/** Rest-pose layout of every body part (also used by the renderer to build the one-piece body mesh). */
+export const PARTS: PartDef[] = [
   { name: 'pelvis', shape: { kind: 'box', hx: 0.17, hy: 0.1, hz: 0.11 }, offset: [0, 0, 0], density: 1000 },
   { name: 'chest', shape: { kind: 'box', hx: 0.2, hy: 0.17, hz: 0.12 }, offset: [0, 0.28, 0], density: 700 },
   { name: 'head', shape: { kind: 'ball', r: 0.14 }, offset: [0, 0.63, 0], density: 600 },
@@ -244,6 +245,34 @@ export class Ragdoll {
     this.yaw = 0;
     for (const leg of this.legs) { leg.planted = false; leg.swinging = false; }
     this.smoothVel.x = 0; this.smoothVel.z = 0;
+  }
+
+  /** Start a punch: for its duration the fist is steered to arm's length along `dir` (see `servoFist`). */
+  punch(i: 0 | 1, dir: { x: number; y: number; z: number }) {
+    this.punchDir[i] = { ...dir };
+  }
+
+  private punchDir: [{ x: number; y: number; z: number } | null, { x: number; y: number; z: number } | null] = [null, null];
+
+  /**
+   * Drive the fist straight at a point an arm's length in front of the shoulder, fast, then hold it there.
+   * Steering by velocity (not a one-off shove) gets it out in a few frames without flinging it over the head.
+   */
+  private servoFist(i: 0 | 1, k: number) {
+    const dir = this.punchDir[i]!;
+    const side = i === 0 ? 1 : -1;
+    const shoulder = localToWorld(this.chest, { x: 0.27 * side, y: 0.12, z: 0 });
+    const tx = shoulder.x + dir.x * 0.6, ty = shoulder.y + dir.y * 0.6, tz = shoulder.z + dir.z * 0.6;
+    const fore = this.hands[i].forearm.body;
+    const hand = localToWorld(fore, HAND_LOCAL);
+    let vx = (tx - hand.x) / 0.05, vy = (ty - hand.y) / 0.05, vz = (tz - hand.z) / 0.05;
+    const vm = Math.hypot(vx, vy, vz);
+    const sp = tuning.punchSpeed;
+    if (vm > sp) { vx *= sp / vm; vy *= sp / vm; vz *= sp / vm; }
+    const cv = this.chest.linvel();
+    const v = fore.linvel();
+    const m = fore.mass() * k;
+    fore.applyImpulseAtPoint({ x: (cv.x + vx - v.x) * m, y: (cv.y + vy - v.y) * m, z: (cv.z + vz - v.z) * m }, hand, true);
   }
 
   /** World positions of both hands. */
@@ -524,13 +553,16 @@ export class Ragdoll {
         continue;
       }
       // Out along the aim. Angle the arm in a little so the hand ends up in front of the chest.
-      const ka = k * t.aimGain * (mode === 'punch' ? 2 : 1);
+      const ka = k * t.aimGain * (mode === 'punch' ? 2 : mode === 'reach' ? 1.5 : 1);
       const inward = mode === 'aim' ? 0.12 : 0.06;
-      this.drive(upper, mul(aimQ, rot(Z_AXIS, -inward * side)), ka);
-      this.drive(fore, aimQ, ka);
+      // Active arms may accelerate much harder than the body, so hands come up fast.
+      this.drive(upper, mul(aimQ, rot(Z_AXIS, -inward * side)), ka, t.armSnap);
+      this.drive(fore, aimQ, ka, t.armSnap);
       this.holdUp(upper, k, this.chest);
       this.holdUp(fore, k, this.chest);
+      if (mode === 'punch' && this.punchDir[i]) this.servoFist(i as 0 | 1, k);
     }
+    for (let i = 0; i < 2; i++) if (this.armMode[i] !== 'punch') this.punchDir[i] = null;
 
     this.updateGrab([this.armMode[0] === 'reach' && k > 0.3, this.armMode[1] === 'reach' && k > 0.3]);
   }
@@ -603,7 +635,7 @@ export class Ragdoll {
   }
 
   /** PD controller: apply a torque impulse that rotates the part toward a world-space orientation. */
-  private drive(name: PartName, target: Quaternion, k: number) {
+  private drive(name: PartName, target: Quaternion, k: number, accelScale = 1) {
     const p = this.parts.get(name)!;
     const t = tuning;
     const kp = (p.balance ? t.balanceKp : t.limbKp) * k;
@@ -622,8 +654,9 @@ export class Ragdoll {
     let ay = kp * _v.y - kd * av.y;
     let az = kp * _v.z - kd * av.z;
     const mag = Math.hypot(ax, ay, az);
-    if (mag > t.maxAngAccel) {
-      const f = t.maxAngAccel / mag;
+    const maxA = t.maxAngAccel * accelScale;
+    if (mag > maxA) {
+      const f = maxA / mag;
       ax *= f; ay *= f; az *= f;
     }
     // torque = I * alpha, done per axis in the body frame. A thin limb has almost no inertia about its

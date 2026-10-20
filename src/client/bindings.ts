@@ -32,13 +32,14 @@ export const DEFAULT_BINDINGS: Bindings = {
   handL: ['KeyQ', null],
   handR: ['KeyE', null],
   fire: ['Mouse0', null],
-  cycle: ['KeyR', null],
+  cycle: ['KeyM', null],
   shoveDummy: ['KeyF', null],
   reset: ['KeyT', null],
   panel: ['Backquote', null],
 };
 
-const STORAGE_KEY = 'lunchstars.bindings.v1';
+// v2: switch hands moved from R to M.
+const STORAGE_KEY = 'lunchstars.bindings.v2';
 
 export const settings = {
   bindings: structuredClone(DEFAULT_BINDINGS) as Bindings,

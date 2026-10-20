@@ -509,8 +509,9 @@ export class Sim {
     // From the punching shoulder's side.
     const o = r.aimOrigin();
     const side = i === 0 ? 1 : -1;
-    const lx = Math.cos(r.yaw) * 0.22 * side, lz = -Math.sin(r.yaw) * 0.22 * side;
+    const lx = Math.cos(r.yaw) * 0.08 * side, lz = -Math.sin(r.yaw) * 0.08 * side;
     const origin = { x: o.x + lx, y: o.y - 0.32, z: o.z + lz };
+    r.punch(i, dir);
     const res = this.hitscan(id, origin, dir, punch.range + 0.3, punch.knockback, 1, punch.lift);
     this.events.push({ type: 'punch', player: id, to: res.point, hit: res.hit });
   }

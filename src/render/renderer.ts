@@ -2,7 +2,8 @@
 // so it works the same whether transforms come from a local sim or a network snapshot.
 import * as THREE from 'three';
 import type { EntityDesc, ShapeDesc } from '../sim/sim';
-import { buildModel } from './models';
+import { buildBody } from './body';
+import { buildFace, buildModel, gummy } from './models';
 
 export class Renderer {
   readonly scene = new THREE.Scene();
@@ -10,6 +11,8 @@ export class Renderer {
   readonly gl: THREE.WebGLRenderer;
   /** One mesh per sim entity, same order as `sim.entities`. */
   meshes: THREE.Object3D[] = [];
+  /** Objects not tied to one entity (skinned bodies). */
+  private extra: THREE.Object3D[] = [];
   private builtVersion = -1;
   private sun: THREE.DirectionalLight;
 
@@ -61,7 +64,23 @@ export class Renderer {
   sync(entities: readonly EntityDesc[], version: number): boolean {
     if (version === this.builtVersion) return false;
     for (const m of this.meshes) this.scene.remove(m);
+    for (const m of this.extra) this.scene.remove(m);
+    this.extra = [];
+    // Player body parts become bones of one skinned body per player (see body.ts).
+    const bonesByPlayer = new Map<number, { bones: THREE.Bone[]; color: number }>();
+    const pickMat = new THREE.MeshBasicMaterial({ visible: false });
     this.meshes = entities.map((e) => {
+      if (e.role === 'player' && e.playerId !== undefined && e.model !== undefined && !isGunModel(e.model)) {
+        const bone = new THREE.Bone();
+        // Invisible copy of the collision shape, so the crosshair raycast can hit players.
+        bone.add(new THREE.Mesh(geometryFor(e.shape), pickMat));
+        if (e.model === 'head') bone.add(buildFace(e.shape.kind === 'ball' ? e.shape.r * 1.12 : 0.16));
+        let entry = bonesByPlayer.get(e.playerId);
+        if (!entry) { entry = { bones: [], color: e.color }; bonesByPlayer.set(e.playerId, entry); }
+        entry.bones.push(bone);
+        this.scene.add(bone);
+        return bone;
+      }
       if (e.model) {
         const model = buildModel(e);
         this.scene.add(model);
@@ -74,6 +93,11 @@ export class Renderer {
       this.scene.add(mesh);
       return mesh;
     });
+    for (const { bones, color } of bonesByPlayer.values()) {
+      const body = buildBody(bones, gummy(color));
+      this.scene.add(body);
+      this.extra.push(body);
+    }
     this.builtVersion = version;
     return true;
   }
@@ -129,4 +153,8 @@ function materialFor(e: EntityDesc): THREE.Material {
     matCache.set(key, m);
   }
   return m;
+}
+
+function isGunModel(m: string) {
+  return m === 'pistol' || m === 'shotgun' || m === 'grenade' || m === 'grenadeLive';
 }

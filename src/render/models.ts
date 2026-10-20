@@ -79,7 +79,7 @@ function grenade(live: boolean) {
 
 const gummyCache = new Map<number, THREE.Material>();
 /** Glossy, candy-like material: clearcoat for the wet shine, sheen for the soft rim. */
-function gummy(color: number) {
+export function gummy(color: number) {
   let m = gummyCache.get(color);
   if (!m) {
     const c = new THREE.Color(color);
@@ -116,6 +116,25 @@ function head(radius: number, color: number) {
   }
   const mouth = new THREE.Mesh(new THREE.TorusGeometry(r * 0.18, r * 0.03, 6, 12, Math.PI), EYE);
   mouth.position.set(0, -r * 0.26, r * 0.92);
+  mouth.rotation.z = Math.PI;
+  g.add(mouth);
+  return g;
+}
+
+/** Eyes, shine and smile for the one-piece body's head bone (face points down +Z). */
+export function buildFace(r: number) {
+  const g = new THREE.Group();
+  for (const side of [-1, 1]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(r * 0.17, 12, 10), EYE);
+    eye.position.set(side * r * 0.34, r * 0.18, r * 0.9);
+    eye.scale.set(0.85, 1.2, 0.55);
+    g.add(eye);
+    const shine = new THREE.Mesh(new THREE.SphereGeometry(r * 0.05, 8, 6), EYE_SHINE);
+    shine.position.set(side * r * 0.34 + r * 0.04, r * 0.26, r * 0.99);
+    g.add(shine);
+  }
+  const mouth = new THREE.Mesh(new THREE.TorusGeometry(r * 0.18, r * 0.03, 6, 12, Math.PI), EYE);
+  mouth.position.set(0, -r * 0.24, r * 0.94);
   mouth.rotation.z = Math.PI;
   g.add(mouth);
   return g;

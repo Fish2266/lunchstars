@@ -12,6 +12,8 @@ src/
     effects.ts  Tracers, flashes, explosions, camera shake — driven only by SimEvents
     gore.ts     Blood fountains/splats + shell casings (pooled InstancedMeshes, client-only)
     models.ts   Display models (guns, grenade, faces); collision still uses simple shapes
+    body.ts     One-piece gummy character: smooth-union SDF of all parts, meshed once with marching cubes,
+                skinned to 11 bones that copy the physics bodies (one draw call, no seams)
   client/     Browser-only: controls (via bindings.ts, remappable), menu.ts (pause + settings), lil-gui tuning panel,
               bot (makes PlayerInput like a human)
   main.ts     Wires it together: input -> sim.step (fixed 60 Hz) -> transforms -> render
@@ -58,6 +60,9 @@ npm run typecheck
 ## Hands
 - `PlayerInput` has `handL` / `handR` (held state), `fire`, `cycle`. The sim edge-detects presses.
 - `Fighter.hands[0|1]` each hold an item + ammo. Each tick `Sim.updateHands` sets `ragdoll.armMode[i]` to idle / reach / aim / punch, and the ragdoll drives each arm on its own. Reaching hands make grab joints; loose guns are excluded from joints (`ragdoll.ignoreGrab`) because touching one picks it up instead.
+
+## Punches
+- A punch sets `armMode` to 'punch' for 0.2 s and steers the fist by velocity toward a point an arm's length along the aim (`servoFist`): fully out in ~4 frames, without flinging over the head. Reaching/aiming arms may accelerate `armSnap`× harder than the body.
 
 ## Loose guns
 - A pool of 4 physics bodies per weapon kind (stable entity indices). Dropping/throwing enables one at the hand with the held model's transform; picking up disables it. Ammo travels with the gun.

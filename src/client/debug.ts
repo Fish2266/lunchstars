@@ -3,7 +3,7 @@
 import GUI from 'lil-gui';
 import { tuning } from '../sim/tuning';
 
-const STORAGE_KEY = 'lunchstars.tuning.v4'; // bump when tuning meanings change
+const STORAGE_KEY = 'lunchstars.tuning.v5'; // bump when tuning meanings change
 
 export function loadSavedTuning() {
   try {
@@ -33,6 +33,8 @@ export function createDebugPanel(actions: { shoveDummy: () => void; reset: () =>
   bal.add(tuning, 'limbKp', 0, 1000, 5).name('limb stiffness');
   bal.add(tuning, 'limbKd', 0, 100, 1).name('limb damping');
   bal.add(tuning, 'aimGain', 0.5, 6, 0.1).name('aim arm gain');
+  bal.add(tuning, 'armSnap', 1, 10, 0.1).name('arm snap');
+  bal.add(tuning, 'punchSpeed', 0, 20, 0.5).name('punch speed');
   bal.add(tuning, 'torsoGain', 0.1, 1.5, 0.01).name('torso stiffness ×');
   bal.add(tuning, 'headGain', 0.05, 1.5, 0.01).name('head stiffness ×');
   bal.add(tuning, 'idleArmGain', 0, 1.5, 0.01).name('idle arm stiffness ×');
