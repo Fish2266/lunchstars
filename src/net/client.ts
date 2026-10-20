@@ -6,6 +6,7 @@ import type { DataConnection } from 'peerjs';
 import { emptyInput, type PlayerInput } from '../sim/input';
 import type { GameView, SimEvent } from '../sim/sim';
 import { openPeer } from './host';
+import { hasTurn } from './ice';
 import {
   binaryType, BUTTONS, decodeSnapshot, encodeInput, FAST_LABEL, PEER_PREFIX, PROTOCOL_VERSION,
   type ReliableMsg, type RosterEntry, type Snapshot,
@@ -71,9 +72,10 @@ export class NetClient {
     const peer = this.peer!;
     const rel = peer.connect(hostId, { label: 'rel', serialization: 'json', reliable: true });
     this.rel = rel;
+    let opened = false;
     await withTimeout(new Promise<void>((resolve, reject) => {
-      peer.on('error', (e) => reject(e.type === 'peer-unavailable' ? new Error('No room with that code.') : e));
-      rel.on('open', () => rel.send({ t: 'hello', v: PROTOCOL_VERSION, name } satisfies ReliableMsg));
+      peer.on('error', (e) => reject(e.type === 'peer-unavailable' ? new Error('No room with that code (check it, and that the host still has the game open).') : e));
+      rel.on('open', () => { opened = true; rel.send({ t: 'hello', v: PROTOCOL_VERSION, name } satisfies ReliableMsg); });
       rel.on('data', (d) => {
         const msg = d as ReliableMsg;
         if (msg.t === 'welcome') { this.you = msg.you; this.setRoster(msg.roster); resolve(); }
@@ -81,7 +83,11 @@ export class NetClient {
         else this.onReliable(msg);
       });
       rel.on('close', () => { reject(new Error('The host closed the connection.')); this.close('The host left the game.'); });
-    }), 'No answer from that room (or the host is unreachable).');
+    }), () => opened
+      ? 'Reached the host, but it didn\'t answer. Make sure you both have the latest version (refresh).'
+      : hasTurn
+        ? 'Found the room, but couldn\'t connect to the host — a firewall may be blocking it.'
+        : 'Found the room, but your networks won\'t connect directly (common on school/work Wi-Fi and phone hotspots). Try another network, or the game needs a relay server.');
     // Second, unreliable channel for snapshots and inputs.
     const fast = peer.connect(hostId, { label: FAST_LABEL, serialization: 'raw', reliable: false, metadata: { id: this.you } });
     this.fast = fast;
@@ -207,9 +213,9 @@ export class NetClient {
   }
 }
 
-function withTimeout<T>(p: Promise<T>, message: string): Promise<T> {
+function withTimeout<T>(p: Promise<T>, message: string | (() => string)): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(message)), CONNECT_TIMEOUT_MS);
+    const timer = setTimeout(() => reject(new Error(typeof message === 'string' ? message : message())), CONNECT_TIMEOUT_MS);
     p.then((v) => { clearTimeout(timer); resolve(v); }, (e) => { clearTimeout(timer); reject(e); });
   });
 }

@@ -7,6 +7,7 @@ import {
   binaryType, BUTTONS, decodeInput, encodeSnapshot, FAST_LABEL, makeRoomCode, MAX_PLAYERS, PEER_PREFIX, PROTOCOL_VERSION,
   type ReliableMsg, type RosterEntry,
 } from './protocol';
+import { iceServers } from './ice';
 
 interface Remote {
   id: number;
@@ -217,10 +218,11 @@ export class NetHost {
 }
 
 /** Create a Peer (with a fixed id for a host); resolves once registered with the broker. */
-export function openPeer(id?: string): Promise<Peer> {
+export async function openPeer(id?: string): Promise<Peer> {
   makeFastChannelsUnreliable();
+  const config = { iceServers: await iceServers() };
   return new Promise((resolve, reject) => {
-    const peer = id ? new Peer(id) : new Peer();
+    const peer = id ? new Peer(id, { config }) : new Peer({ config });
     const fail = (e: unknown) => { peer.destroy(); reject(e); };
     peer.once('open', () => { peer.off('error', fail); resolve(peer); });
     peer.once('error', fail);
