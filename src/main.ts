@@ -8,7 +8,7 @@ import { createDebugPanel, loadSavedTuning } from './client/debug';
 import { Effects } from './render/effects';
 import { Renderer } from './render/renderer';
 import type { PlayerInput } from './sim/input';
-import { DT, PLAYER_COLORS, Sim } from './sim/sim';
+import { DT, koThreshold, PLAYER_COLORS, Sim } from './sim/sim';
 import { tuning } from './sim/tuning';
 import { explosive, handling, punch, weapons, type WeaponKind } from './sim/weapons';
 import { Gore, goreSettings } from './render/gore';
@@ -106,6 +106,9 @@ async function main() {
   ko.add(tuning, 'koBonk', 0, 80, 1).name('thrown-gun bonk');
   ko.add(tuning, 'koBlast', 0, 200, 5).name('explosion');
   ko.add(tuning, 'koDecay', 0, 60, 1).name('drain / s');
+  ko.add(tuning, 'koDecayDelay', 0, 6, 0.1).name('drain delay');
+  ko.add(tuning, 'koRepeatEase', 0.3, 1, 0.01).name('repeat KO ease');
+  ko.add(tuning, 'koTimePerRepeat', 0, 5, 0.25).name('repeat KO +s');
   ko.add(tuning, 'koTime', 0.5, 12, 0.5).name('KO seconds');
   ko.add(tuning, 'koMash', 0, 0.5, 0.01).name('mash cuts');
   ko.close();
@@ -156,8 +159,8 @@ async function main() {
     const o = me.aimOrigin();
     const dx = aimPoint.x - o.x, dy = aimPoint.y - o.y, dz = aimPoint.z - o.z;
     const h = Math.hypot(dx, dz);
-    // Very close targets give unstable angles; fall back to the camera direction.
-    if (h > 1.2) {
+    // Only when the crosshair is practically on top of us is the angle unstable; then use the camera direction.
+    if (h > 0.35) {
       input.aimYaw = Math.atan2(dx, dz);
       input.aimPitch = Math.atan2(dy, h);
     }
@@ -206,6 +209,10 @@ async function main() {
     animateModels(now / 1000);
     hitMarkerTimer = Math.max(0, hitMarkerTimer - frameDt);
     crosshair.classList.toggle('hit', hitMarkerTimer > 0);
+    // In punching reach (and a hand free to punch with): the crosshair turns into a ring.
+    const fme = sim.fighters.get(LOCAL_ID)!;
+    const freeHand = !fme.hands[0].item || !fme.hands[1].item;
+    crosshair.classList.toggle('reach', freeHand && fme.koTimer === 0 && sim.punchWouldHit(LOCAL_ID, myInput.aimYaw, myInput.aimPitch));
 
     // Render.
     renderer.applyTransforms(transforms);
@@ -249,12 +256,13 @@ async function main() {
       for (const [id, ft] of sim.fighters) {
         const r = sim.players.get(id)!;
         const color = '#' + PLAYER_COLORS[ft.slot % PLAYER_COLORS.length].toString(16).padStart(6, '0');
-        const pct = Math.min(100, (ft.ko / tuning.koThreshold) * 100);
+        const thr = koThreshold(ft);
+        const pct = Math.min(100, (ft.ko / thr) * 100);
         const items = ft.hands.map((h) => h.item ? `${h.item}(${h.ammo})` : '–').join(' / ');
         html += `<div class="p"><b style="color:${color}">${id === LOCAL_ID ? 'You' : 'Dummy'}</b>`
           + (ft.koTimer > 0 ? ` <span class="out">KO ${ft.koTimer.toFixed(1)}s</span>` : '')
           + `<div class="bar"><i style="width:${pct}%"></i></div>`
-          + `KO meter ${ft.ko.toFixed(0)}/${tuning.koThreshold} · KOs ${ft.koCount} · hits ${ft.hitsTaken}<br>`
+          + `KO meter ${ft.ko.toFixed(0)}/${thr.toFixed(0)} · KOs ${ft.koCount} · hits ${ft.hitsTaken}<br>`
           + `stiffness ${r.stiffness.toFixed(2)} · stun ${r.stunTimer.toFixed(2)}s · stagger ${r.staggerTimer.toFixed(2)}s · ${r.grounded ? 'grounded' : 'airborne'}<br>`
           + `hands ${items} · active ${ft.active === 0 ? 'L' : 'R'}</div>`;
       }

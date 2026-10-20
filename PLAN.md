@@ -57,10 +57,15 @@ Gang Beasts PC uses one input per hand (tap = punch, hold = grab). We use:
 - Punches snap out in ~4 frames; held hands come up in ~4 frames. Switch hands defaults to M.
 
 ## Knockouts (done)
-- Hidden KO meter per player. Punch 16 (head ×2.2), shots scale with knockback (head ×1.5), thrown-gun bonk 25, explosions up to 80. Drains 14/s after 1.2 s without a hit.
-- At 100: knocked out ~4 s (+1 s per earlier KO this life, max 8): fully limp, drops items, X eyes + circling stars, can be dragged/thrown. Mashing hand/jump keys shortens it a little. Wakes groggy (stiffness ramps back).
+- Hidden KO meter per player. Punch 22 (head ×2), shots scale with knockback (head ×1.5), thrown-gun bonk 30, explosions up to 90. Drains only 5/s, and only after 2.5 s without a hit. ~4 landed punches knock someone out.
+- Knocked out: fully limp, drops items, X eyes + circling stars, can be dragged/thrown. Mashing hand/jump keys shortens it a little. Wakes groggy (stiffness ramps back).
+- Each KO this life makes the next one easier and longer: threshold 100 → 75% → 56% … (min 35%), duration 4 s → +2 s each (max 12 s). Currently per life; becomes per round in Phase 4.
 - Debug HUD (panel → "Debug HUD (KO, stats)") shows meters/timers; not shown in normal play. KO numbers are in the panel's Knockouts folder.
 - Blood only from guns and explosions; droplets re-check the ground as they fly, so no puddles over the pit.
+
+## Hit detection
+- Punches and bullets are swept spheres (punch 0.28 m, pistol 6 cm, pellets 4.5 cm), so close-range near misses count. Punch reach ≈ 1.3 m chest-to-chest.
+- The crosshair turns into a yellow ring whenever a punch would land (same sweep as the real punch).
 
 ## Known feel issues / tuning backlog
 - Grab reach takes ~0.8 s; consider stronger arm gains while grabbing.

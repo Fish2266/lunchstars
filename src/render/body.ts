@@ -18,7 +18,8 @@ const LEG_SPREAD = 0.1;
 
 type Prim =
   | { kind: 'ellipsoid'; c: THREE.Vector3; r: THREE.Vector3 }
-  | { kind: 'capsule'; hh: number; r: number };
+  /** Tapered capsule along local Y, from (y0, r0) to (y1, r1). */
+  | { kind: 'cone'; y0: number; r0: number; y1: number; r1: number };
 
 interface PartShape {
   name: PartName;
@@ -31,28 +32,38 @@ interface PartShape {
 
 const v3 = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 
-/** Soft shapes for each part, in the part's local frame. Sized a bit chunkier than the physics shapes. */
+/**
+ * Soft shapes for each part, in the part's local frame. The torso, hips and head form one bean (the head is
+ * nearly as wide as the body, no neck). Limbs taper and start inside the body so they grow out of it.
+ */
 function primsFor(name: PartName): Prim[] {
   switch (name) {
     case 'pelvis': return [
-      { kind: 'ellipsoid', c: v3(0, 0, 0), r: v3(0.2, 0.18, 0.17) },
-      // A little rounded rear.
-      { kind: 'ellipsoid', c: v3(0.07, -0.05, -0.085), r: v3(0.11, 0.105, 0.095) },
-      { kind: 'ellipsoid', c: v3(-0.07, -0.05, -0.085), r: v3(0.11, 0.105, 0.095) },
+      { kind: 'ellipsoid', c: v3(0, -0.01, -0.005), r: v3(0.215, 0.19, 0.18) },
+      // A soft, rounded rear: one smooth bulge, not two cheeks.
+      { kind: 'ellipsoid', c: v3(0, -0.06, -0.06), r: v3(0.2, 0.14, 0.16) },
     ];
-    case 'chest': return [{ kind: 'ellipsoid', c: v3(0, -0.02, 0), r: v3(0.235, 0.26, 0.19) }];
-    case 'head': return [{ kind: 'ellipsoid', c: v3(0, 0.01, 0), r: v3(0.16, 0.165, 0.16) }];
-    case 'upperArmL': case 'upperArmR': return [{ kind: 'capsule', hh: 0.1, r: 0.075 }];
+    case 'chest': return [{ kind: 'ellipsoid', c: v3(0, 0, 0), r: v3(0.225, 0.27, 0.185) }];
+    case 'head': return [{ kind: 'ellipsoid', c: v3(0, 0.0, 0.0), r: v3(0.2, 0.2, 0.19) }];
+    case 'upperArmL': case 'upperArmR': return [{ kind: 'cone', y0: 0.15, r0: 0.088, y1: -0.1, r1: 0.07 }];
     case 'forearmL': case 'forearmR': return [
-      { kind: 'capsule', hh: 0.1, r: 0.068 },
-      { kind: 'ellipsoid', c: v3(0, -0.15, 0.005), r: v3(0.09, 0.1, 0.085) },
+      { kind: 'cone', y0: 0.1, r0: 0.07, y1: -0.1, r1: 0.062 },
+      { kind: 'ellipsoid', c: v3(0, -0.155, 0.005), r: v3(0.088, 0.098, 0.083) },
     ];
-    case 'thighL': case 'thighR': return [{ kind: 'capsule', hh: 0.13, r: 0.095 }];
+    case 'thighL': case 'thighR': return [{ kind: 'cone', y0: 0.18, r0: 0.115, y1: -0.13, r1: 0.088 }];
     case 'shinL': case 'shinR': return [
-      { kind: 'capsule', hh: 0.19, r: 0.088 },
-      { kind: 'ellipsoid', c: v3(0, -0.215, 0.05), r: v3(0.095, 0.07, 0.135) },
+      { kind: 'cone', y0: 0.19, r0: 0.087, y1: -0.19, r1: 0.076 },
+      { kind: 'ellipsoid', c: v3(0, -0.215, 0.05), r: v3(0.092, 0.068, 0.132) },
     ];
   }
+}
+
+/** How softly each part melts into what it attaches to (smooth-union size, metres). */
+function blendFor(name: PartName): number {
+  if (name === 'chest') return 0.16;
+  if (name === 'head') return 0.13;
+  if (name.startsWith('thigh') || name.startsWith('upperArm')) return 0.09;
+  return 0.06; // shins and forearms join at the knee / elbow
 }
 
 /** Mesh rest pose: physics rest pose with arms lifted out and legs slightly apart, so limbs don't fuse. */
@@ -76,9 +87,11 @@ function restShapes(): PartShape[] {
 }
 
 function primSdf(p: Prim, q: THREE.Vector3): number {
-  if (p.kind === 'capsule') {
-    const y = Math.max(-p.hh, Math.min(p.hh, q.y));
-    return Math.hypot(q.x, q.y - y, q.z) - p.r;
+  if (p.kind === 'cone') {
+    // Distance to the axis segment, with the radius interpolated along it (good enough for gentle tapers).
+    const t = Math.max(0, Math.min(1, (q.y - p.y0) / (p.y1 - p.y0)));
+    const y = p.y0 + (p.y1 - p.y0) * t;
+    return Math.hypot(q.x, q.y - y, q.z) - (p.r0 + (p.r1 - p.r0) * t);
   }
   // Ellipsoid (good-enough approximation).
   const x = (q.x - p.c.x) / p.r.x, y = (q.y - p.c.y) / p.r.y, z = (q.z - p.c.z) / p.r.z;
@@ -109,7 +122,7 @@ export function bodyGeometry() {
   const shapes = restShapes();
 
   // Marching cubes over a cube that contains the A-posed character.
-  const RES = 96;
+  const RES = 112;
   const SIDE = 2.1;
   const CENTER = v3(0, -0.15, 0.02);
   const mc = new MarchingCubes(RES, new THREE.MeshBasicMaterial(), false, false, 120000);
@@ -126,9 +139,7 @@ export function bodyGeometry() {
         for (const s of shapes) {
           const ds = partSdf(s, p);
           // Torso, hips, and head melt together more than limbs do.
-          // Big soft fillets everywhere so the body reads as one continuous gummy piece.
-          const k = s.name === 'chest' || s.name === 'pelvis' || s.name === 'head' ? 0.11 : 0.07;
-          d = d === Infinity ? ds : smin(d, ds, k);
+          d = d === Infinity ? ds : smin(d, ds, blendFor(s.name));
         }
         mc.field[x + y * RES + z * RES * RES] = -d; // inside is positive
       }

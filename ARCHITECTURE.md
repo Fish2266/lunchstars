@@ -12,7 +12,7 @@ src/
     effects.ts  Tracers, flashes, explosions, camera shake — driven only by SimEvents
     gore.ts     Blood fountains/splats + shell casings (pooled InstancedMeshes, client-only)
     models.ts   Display models (guns, grenade, faces); collision still uses simple shapes
-    body.ts     One-piece gummy character: smooth-union SDF of all parts, meshed once with marching cubes,
+    body.ts     One-piece gummy character (bean torso+head, tapered limbs): smooth-union SDF of all parts, meshed once with marching cubes,
                 skinned to 11 bones that copy the physics bodies (one draw call, no seams)
   client/     Browser-only: controls (via bindings.ts, remappable), menu.ts (pause + settings), lil-gui tuning panel,
               bot (makes PlayerInput like a human)

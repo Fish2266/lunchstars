@@ -76,7 +76,8 @@ export class Renderer {
         // Invisible copy of the collision shape, so the crosshair raycast can hit players.
         bone.add(new THREE.Mesh(geometryFor(e.shape), pickMat));
         if (e.model === 'head') {
-          const face = buildFace(e.shape.kind === 'ball' ? e.shape.r * 1.12 : 0.16);
+          // Matches the head of the body bean (see body.ts), not the smaller physics ball.
+          const face = buildFace(0.195);
           bone.add(face.group);
           this.faces.set(e.playerId, face);
         }

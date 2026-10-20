@@ -119,6 +119,12 @@ export interface Fighter {
   mashPrev: boolean;
 }
 
+/** Knockouts get easier each time you've been knocked out this life. */
+export function koThreshold(f: Fighter) {
+  const t = tuning;
+  return t.koThreshold * Math.max(t.koMinThreshold, Math.pow(t.koRepeatEase, f.koCount));
+}
+
 /** The hand whose item the mouse would use, or null if both hands are empty. */
 export function activeHand(f: Fighter): 0 | 1 | null {
   if (f.hands[f.active].item) return f.active;
@@ -326,7 +332,7 @@ export class Sim {
     const muzzle = this.muzzle(r, kind, dir, hi);
     for (let i = 0; i < w.pellets; i++) {
       const d = this.spreadDir(dir, w.spread);
-      const res = this.hitscan(id, origin, d, w.range, w.knockback, w.falloff, w.lift, w.pellets > 1 ? 'pellet' : 'shot');
+      const res = this.hitscan(id, origin, d, w.range, w.knockback, w.falloff, w.lift, w.pellets > 1 ? 'pellet' : 'shot', w.radius);
       this.events.push({ type: 'shot', player: id, weapon: kind, from: muzzle, to: res.point, hit: res.hit, first: i === 0, dir: d });
     }
     if (w.recoil > 0) {
@@ -350,15 +356,14 @@ export class Sim {
    * Cast a ray and knock back whatever it hits. Every gun (and the debug shove) goes through here.
    * `falloff` is the knockback multiplier at max range.
    */
-  hitscan(shooter: number | undefined, origin: V3, dir: V3, range: number, knockback: number, falloff: number, lift = 0.25, cause: HitCause = 'shove') {
-    const ignore = shooter !== undefined ? this.players.get(shooter) : undefined;
-    const ray = new this.R.Ray(origin, dir);
-    const hit = this.world.castRay(ray, range, true, undefined, undefined, undefined, undefined,
-      (c) => !(ignore && ignore.ownsCollider(c)) && !this.isGrenadeCollider(c));
-    if (!hit) {
+  hitscan(shooter: number | undefined, origin: V3, dir: V3, range: number, knockback: number, falloff: number,
+    lift = 0.25, cause: HitCause = 'shove', radius = 0) {
+    const found = this.sweep(shooter, origin, dir, range, radius);
+    if (!found) {
       return { hit: false, point: { x: origin.x + dir.x * range, y: origin.y + dir.y * range, z: origin.z + dir.z * range } };
     }
-    const point = ray.pointAt(hit.timeOfImpact);
+    const hit = { collider: found.collider, timeOfImpact: found.toi };
+    const point = found.point;
     const body = hit.collider.parent();
     if (!body || !body.isDynamic()) return { hit: false, point };
     const strength = knockback * (1 + (falloff - 1) * (hit.timeOfImpact / range));
@@ -384,6 +389,38 @@ export class Sim {
       body.applyImpulseAtPoint({ x: imp.x * s, y: imp.y * s, z: imp.z * s }, point, true);
     }
     return { hit: true, point };
+  }
+
+  /**
+   * First thing along `dir` from `origin`, ignoring the shooter: a thin ray, or a sphere of `radius` swept
+   * along it (fists and bullets have thickness, so near misses at close range still count).
+   */
+  private sweep(shooter: number | undefined, origin: V3, dir: V3, range: number, radius: number) {
+    const ignore = shooter !== undefined ? this.players.get(shooter) : undefined;
+    const filter = (c: RAPIER_NS.Collider) => !(ignore && ignore.ownsCollider(c)) && !this.isGrenadeCollider(c);
+    if (radius <= 0) {
+      const ray = new this.R.Ray(origin, dir);
+      const h = this.world.castRay(ray, range, true, undefined, undefined, undefined, undefined, filter);
+      return h ? { collider: h.collider, toi: h.timeOfImpact, point: ray.pointAt(h.timeOfImpact) } : null;
+    }
+    const h = this.world.castShape(origin, { x: 0, y: 0, z: 0, w: 1 }, dir, new this.R.Ball(radius), 0, range, true,
+      undefined, undefined, undefined, undefined, filter);
+    if (!h) return null;
+    // witness1 is the touched point on the hit collider (world space).
+    return { collider: h.collider, toi: h.time_of_impact, point: { ...h.witness1 } };
+  }
+
+  /** Would a punch from this player land on someone right now? (For the crosshair's in-reach cue.) */
+  punchWouldHit(id: number, aimYaw: number, aimPitch: number): boolean {
+    const r = this.players.get(id);
+    if (!r) return false;
+    const found = this.sweep(id, this.punchOrigin(r), aimDir(aimYaw, aimPitch), punch.range, punch.radius);
+    return !!found && [...this.players.values()].some((p) => p !== r && p.ownsCollider(found.collider));
+  }
+
+  private punchOrigin(r: Ragdoll): V3 {
+    const o = r.aimOrigin();
+    return { x: o.x, y: o.y - 0.32, z: o.z };
   }
 
   /** Back-compat debug helper: knock back along a ray with no shooter. */
@@ -474,7 +511,7 @@ export class Sim {
     f.sinceHit = 0;
     if (f.koTimer > 0) return; // already out
     f.ko += amount;
-    if (f.ko >= tuning.koThreshold) {
+    if (f.ko >= koThreshold(f)) {
       const t = tuning;
       f.ko = 0;
       f.koTimer = Math.min(t.koTimeMax, t.koTime + f.koCount * t.koTimePerRepeat);
@@ -571,13 +608,9 @@ export class Sim {
     h.punchTimer = 0.2;
     h.punchCooldown = punch.cooldown;
     const dir = aimDir(input.aimYaw, input.aimPitch);
-    // From the punching shoulder's side.
-    const o = r.aimOrigin();
-    const side = i === 0 ? 1 : -1;
-    const lx = Math.cos(r.yaw) * 0.08 * side, lz = -Math.sin(r.yaw) * 0.08 * side;
-    const origin = { x: o.x + lx, y: o.y - 0.32, z: o.z + lz };
     r.punch(i, dir);
-    const res = this.hitscan(id, origin, dir, punch.range + 0.3, punch.knockback, 1, punch.lift, 'punch');
+    // Same sweep as `punchWouldHit`, so the crosshair cue and the real punch always agree.
+    const res = this.hitscan(id, this.punchOrigin(r), dir, punch.range, punch.knockback, 1, punch.lift, 'punch', punch.radius);
     this.events.push({ type: 'punch', player: id, to: res.point, hit: res.hit });
   }
 

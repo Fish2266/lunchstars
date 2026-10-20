@@ -16,6 +16,8 @@ export interface WeaponDef {
   /** Cone half-angle in radians. */
   spread: number;
   range: number;
+  /** Bullet thickness: shots are swept spheres this big, so near misses at close range still connect. */
+  radius: number;
   /** Knockback multiplier at max range (linear falloff from 1 at point blank). */
   falloff: number;
   /** Extra upward kick as a fraction of knockback (launches instead of slides). */
@@ -33,15 +35,15 @@ export interface WeaponDef {
 
 export const weapons: Record<WeaponKind, WeaponDef> = {
   pistol: {
-    ammo: 12, cooldown: 0.28, knockback: 22, pellets: 1, spread: 0.01, range: 60, falloff: 0.7, lift: 0.25, recoil: 0.6, armKick: 2.5, camKick: 0.03,
+    ammo: 12, cooldown: 0.28, knockback: 22, pellets: 1, spread: 0.01, range: 60, radius: 0.06, falloff: 0.7, lift: 0.25, recoil: 0.6, armKick: 2.5, camKick: 0.03,
     shape: { kind: 'box', hx: 0.04, hy: 0.07, hz: 0.14 }, color: 0x2b2d33,
   },
   shotgun: {
-    ammo: 6, cooldown: 0.85, knockback: 16, pellets: 8, spread: 0.1, range: 14, falloff: 0.15, lift: 0.55, recoil: 6, armKick: 6, camKick: 0.09,
+    ammo: 6, cooldown: 0.85, knockback: 16, pellets: 8, spread: 0.1, range: 14, radius: 0.045, falloff: 0.15, lift: 0.55, recoil: 6, armKick: 6, camKick: 0.09,
     shape: { kind: 'box', hx: 0.045, hy: 0.06, hz: 0.36 }, color: 0x6b3f22,
   },
   grenade: {
-    ammo: 1, cooldown: 0.7, knockback: 0, pellets: 0, spread: 0, range: 0, falloff: 1, lift: 0, recoil: 0, armKick: 0, camKick: 0,
+    ammo: 1, cooldown: 0.7, knockback: 0, pellets: 0, spread: 0, range: 0, radius: 0, falloff: 1, lift: 0, recoil: 0, armKick: 0, camKick: 0,
     shape: { kind: 'ball', r: 0.1 }, color: 0x3c6e2f,
   },
 };
@@ -59,8 +61,8 @@ export const explosive = {
   stun: 2.6,
 };
 
-/** Unarmed: a short shove from the chest. */
-export const punch = { range: 1.3, knockback: 9, lift: 0.3, cooldown: 0.3 };
+/** Unarmed: a punch is a fat sphere swept along your aim, so anything roughly in front of your fist counts. */
+export const punch = { range: 1.0, radius: 0.28, knockback: 9, lift: 0.3, cooldown: 0.3 };
 
 export const PICKUP_RESPAWN = 8;
 
