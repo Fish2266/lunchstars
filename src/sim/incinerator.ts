@@ -1,44 +1,68 @@
-// "Incinerator": an industrial room on a ledge over a drop, built around a furnace fed by a conveyor belt.
-// Inspired by the Gang Beasts map of the same name.
+// "Incinerator": a factory floor around a central fire pit.
 //
-//            back wall
-//   ┌──────────┬──[ FURNACE ]──┬───────────┐
-//   │ catwalk  │    ║belt║     │ side room │
-//   │ (raised) │    ║ ↓↓ ║     │  (guns)   │
-//   │   ramp   │    ║    ║     └──door─────┤
-//   │    ║     │                           │
-//   └────╨─────── parapet ── gap ──────────┘   ← drop on the far side of the parapet
+//            tall back wall (pipes)
+//  ┌─────────────────┬───┬─────────────────┐
+//  │ platform  ramp  │ ↓ │  ramp  platform │
+//  │                 │belt│                 │
+//  │ belt → → → ─┐ ┌─┴───┴─┐ ┌─ ← ← ← belt │
+//  │             └─│ FIRE  │─┘             │
+//  │               │  PIT  │  rails break  │
+//  │               └───────┘               │
+//  │   spawn                      spawn    │
+//  └──────── waist-high wall (drop) ───────┘
 //
-// Coordinates: floor top at y = 0, the furnace at the back (-z), the open front at +z.
+// - Three conveyor belts run into the pit. Guns only ever arrive on the belts, riding toward the fire,
+//   so getting armed means stepping onto a belt next to the pit.
+// - The pit is ringed by railing sections that break when a body slams into them or they're shot enough.
+// - Every so often the pit flares up and blasts anyone near the rim.
+// Coordinates: floor top at y = 0, pit centred on the origin, back wall at -z.
 import type { V3 } from './sim';
-import type { WeaponKind } from './weapons';
-
-export interface ArenaBuilder {
-  box(pos: V3, half: V3, color: number, opts?: { rotY?: number; rotX?: number; emissive?: number; belt?: boolean; friction?: number }): void;
-  crate(pos: V3, size: number, color: number): void;
-  pickup(kind: WeaponKind, pos: V3): void;
-}
 
 export interface Box3 { min: V3; max: V3 }
+
+export interface ArenaBuilder {
+  box(pos: V3, half: V3, color: number, opts?: { rotY?: number; rotX?: number; emissive?: number; flow?: { x: number; z: number }; friction?: number }): void;
+  crate(pos: V3, size: number, color: number): void;
+  /** A breakable railing section: solid until a hard hit, then it falls loose. */
+  rail(pos: V3, half: V3, color: number): void;
+}
+
+export interface Belt {
+  /** Anything inside this volume rides the belt. */
+  box: Box3;
+  /** Belt surface velocity (m/s on the floor plane). */
+  vel: { x: number; z: number };
+  /** Where guns and crates are dropped onto it (the end away from the pit). */
+  spawn: V3;
+}
+
+const PIT = 2; // half-width of the pit opening
+const BELT_SPEED = 1.6;
+// Belts are flush with the floor (recessed conveyors), so you can walk, slide or be dragged straight onto them.
+const BELT_TOP = 0.012;
+const BELT_HALF_H = 0.11;
 
 /** Map data the simulation's hazards use. */
 export const INCINERATOR = {
   spawns: [
-    { x: -3, y: 0, z: 3.8 },
-    { x: 3, y: 0, z: 3.8 },
-    { x: -4.5, y: 0, z: 0.5 },
-    { x: 4.5, y: 0, z: 0.8 },
+    { x: -4.5, y: 0, z: 4.5 },
+    { x: 4.5, y: 0, z: 4.5 },
+    { x: -4.5, y: 0, z: -3.3 },
+    { x: 4.5, y: 0, z: -3.3 },
   ] as V3[],
-  /** Touch this and you're incinerated. */
-  fire: { min: { x: -1.5, y: -0.5, z: -7.2 }, max: { x: 1.5, y: 2.4, z: -5.5 } } as Box3,
-  /** The conveyor: anything resting on it is carried toward the furnace (-z). */
-  belt: { min: { x: -1.2, y: 0.15, z: -5.6 }, max: { x: 1.2, y: 1.6, z: 1.5 } } as Box3,
-  beltSpeed: 1.5,
-  /** Where crates appear on the belt. */
-  beltSpawn: { x: 0, y: 1.6, z: 0.9 } as V3,
-  /** The furnace's periodic flame burst covers this. */
-  burst: { min: { x: -1.5, y: 0, z: -5.6 }, max: { x: 1.5, y: 2.6, z: -2.0 } } as Box3,
-  furnaceMouth: { x: 0, y: 1.1, z: -5.4 } as V3,
+  /** Below the rim of the pit: incinerated. */
+  fire: { min: { x: -PIT, y: -6, z: -PIT }, max: { x: PIT, y: -0.55, z: PIT } } as Box3,
+  belts: [
+    // Push volumes run 0.6 m past the belt's end so nothing comes to rest balanced on the pit's edge.
+    { box: { min: { x: -8.6, y: -0.6, z: -1 }, max: { x: -PIT + 0.6, y: 1.6, z: 1 } }, vel: { x: BELT_SPEED, z: 0 }, spawn: { x: -7.9, y: 1.1, z: 0 } },
+    { box: { min: { x: PIT - 0.6, y: -0.6, z: -1 }, max: { x: 8.6, y: 1.6, z: 1 } }, vel: { x: -BELT_SPEED, z: 0 }, spawn: { x: 7.9, y: 1.1, z: 0 } },
+    { box: { min: { x: -1, y: -0.6, z: -8 }, max: { x: 1, y: 1.6, z: -PIT + 0.6 } }, vel: { x: 0, z: BELT_SPEED }, spawn: { x: 0, y: 1.1, z: -7.3 } },
+  ] as Belt[],
+  beltSpeed: BELT_SPEED,
+  /** The pit flare hits anyone in here. */
+  flare: { min: { x: -3.4, y: -0.6, z: -3.4 }, max: { x: 3.4, y: 3.2, z: 3.4 } } as Box3,
+  pitCenter: { x: 0, y: 0, z: 0 } as V3,
+  pitHalf: PIT,
 };
 
 const C = {
@@ -48,91 +72,100 @@ const C = {
   wall: 0x5c3f35,
   iron: 0x2c2d31,
   rust: 0x7a4426,
+  pitWall: 0x6a3420,
   fire: 0xff6a1a,
   belt: 0x26272b,
   rail: 0xe3b21b,
   grate: 0x4c525a,
-  room: 0x6f7c74,
-  shelf: 0x7a6040,
+  pipeA: 0x7a6a3a,
+  pipeB: 0x3e6a6e,
   crate: 0xb08a58,
 };
 
 export function buildIncinerator(b: ArenaBuilder) {
-  // ---------------------------------------------------------------- floor and edges
-  b.box({ x: 0, y: -0.5, z: -0.5 }, { x: 8, y: 0.5, z: 6.5 }, C.floor);
-  // Parapet around the open sides (waist-ish high: you can be knocked over it), with a gap at the front-left.
-  const ph = 0.38; // half height
-  b.box({ x: 1.75, y: ph, z: 5.9 }, { x: 6.25, y: ph, z: 0.1 }, C.parapet); // front, x -4.5..8
-  b.box({ x: -7.6, y: ph, z: 5.9 }, { x: 0.4, y: ph, z: 0.1 }, C.parapet); // front, x -8..-7.2 (gap -7.2..-4.5)
-  b.box({ x: -7.9, y: ph, z: -0.6 }, { x: 0.1, y: ph, z: 6.4 }, C.parapet); // left side
-  b.box({ x: 7.9, y: ph, z: 1.8 }, { x: 0.1, y: ph, z: 4.0 }, C.parapet); // right side, in front of the side room
-  // Yellow rail caps.
-  b.box({ x: 1.75, y: ph * 2 + 0.03, z: 5.9 }, { x: 6.25, y: 0.03, z: 0.13 }, C.stripe);
-  b.box({ x: -7.6, y: ph * 2 + 0.03, z: 5.9 }, { x: 0.4, y: 0.03, z: 0.13 }, C.stripe);
-  b.box({ x: -7.9, y: ph * 2 + 0.03, z: -0.6 }, { x: 0.13, y: 0.03, z: 6.4 }, C.stripe);
-  b.box({ x: 7.9, y: ph * 2 + 0.03, z: 1.8 }, { x: 0.13, y: 0.03, z: 4.0 }, C.stripe);
-  // Hazard stripes either side of the gap.
-  b.box({ x: -5.85, y: 0.005, z: 5.6 }, { x: 1.35, y: 0.01, z: 0.35 }, C.stripe);
-
-  // ---------------------------------------------------------------- back wall and furnace
-  b.box({ x: 0, y: 2.5, z: -7.25 }, { x: 8, y: 2.5, z: 0.25 }, C.wall);
-  // Furnace: two pillars and a lintel framing a fiery mouth, with a chimney above.
-  b.box({ x: -2.05, y: 2, z: -6.1 }, { x: 0.55, y: 2, z: 0.9 }, C.iron);
-  b.box({ x: 2.05, y: 2, z: -6.1 }, { x: 0.55, y: 2, z: 0.9 }, C.iron);
-  b.box({ x: 0, y: 3.2, z: -6.1 }, { x: 1.5, y: 0.8, z: 0.9 }, C.rust);
-  b.box({ x: 0, y: 5.5, z: -6.6 }, { x: 1.0, y: 1.5, z: 0.6 }, C.iron);
-  // The fire inside (glowing).
-  b.box({ x: 0, y: 1.2, z: -6.95 }, { x: 1.5, y: 1.2, z: 0.05 }, C.fire, { emissive: 1.6 });
-  b.box({ x: 0, y: 0.03, z: -6.2 }, { x: 1.5, y: 0.03, z: 0.8 }, C.fire, { emissive: 1.2 });
-
-  // ---------------------------------------------------------------- conveyor
-  // Low enough (0.24 m) to step onto: you can walk up the belt, or be dragged onto it.
-  b.box({ x: 0, y: 0.12, z: -2.05 }, { x: 1.2, y: 0.12, z: 3.55 }, C.belt, { belt: true, friction: 1.2 });
-  // Guard rails along both sides (stop at the start so you can step / be knocked on).
-  for (const side of [-1, 1]) {
-    // Rails cover the back two thirds; the front of the belt is open so bodies can be dragged on.
-    b.box({ x: side * 1.32, y: 0.6, z: -3.05 }, { x: 0.06, y: 0.06, z: 2.45 }, C.rail);
-    for (const z of [-5.3, -3.05, -0.8]) b.box({ x: side * 1.32, y: 0.3, z }, { x: 0.05, y: 0.3, z: 0.05 }, C.rail);
+  // ---------------------------------------------------------------- floor with a hole in the middle
+  b.box({ x: 0, y: -0.5, z: 4.5 }, { x: 9, y: 0.5, z: 2.5 }, C.floor); // front (z 2..7)
+  b.box({ x: 0, y: -0.5, z: -5 }, { x: 9, y: 0.5, z: 3 }, C.floor); // back (z -8..-2)
+  b.box({ x: -5.5, y: -0.5, z: 0 }, { x: 3.5, y: 0.5, z: PIT }, C.floor); // left
+  b.box({ x: 5.5, y: -0.5, z: 0 }, { x: 3.5, y: 0.5, z: PIT }, C.floor); // right
+  // Hazard stripes around the rim.
+  for (const [x, z, hx, hz] of [[0, 2.3, 2.6, 0.18], [0, -2.3, 2.6, 0.18], [-2.3, 0, 0.18, 2.6], [2.3, 0, 0.18, 2.6]]) {
+    b.box({ x, y: 0.005, z }, { x: hx, y: 0.008, z: hz }, C.stripe);
   }
 
-  // ---------------------------------------------------------------- catwalk (left) with ramp
-  b.box({ x: -6.25, y: 1.9, z: -4.75 }, { x: 1.65, y: 0.1, z: 2.25 }, C.grate);
-  for (const [x, z] of [[-4.75, -2.7], [-4.75, -6.8]]) b.box({ x, y: 0.9, z }, { x: 0.1, y: 0.9, z: 0.1 }, C.iron);
-  b.box({ x: -6.8, y: 1.0, z: 0 }, { x: 0.8, y: 0.08, z: 2.69 }, C.grate, { rotX: 0.38 });
+  // ---------------------------------------------------------------- the pit
+  // Glowing walls down to a bed of fire about a metre and a half below the rim (visible from the floor).
+  for (const s of [-1, 1]) {
+    b.box({ x: s * (PIT + 0.1), y: -1.0, z: 0 }, { x: 0.1, y: 0.95, z: PIT + 0.2 }, C.pitWall, { emissive: 0.6 });
+    b.box({ x: 0, y: -1.0, z: s * (PIT + 0.1) }, { x: PIT + 0.2, y: 0.95, z: 0.1 }, C.pitWall, { emissive: 0.6 });
+  }
+  b.box({ x: 0, y: -1.5, z: 0 }, { x: PIT, y: 0.08, z: PIT }, C.fire, { emissive: 2.6 });
 
-  // ---------------------------------------------------------------- side room (right): door + windows
-  const wh = 1.3; // wall half height
-  const t = 0.08;
-  // Inner wall at x = 4.6 (from the back wall to the front corner), door z -4.4..-3.2, window z -6.4..-5.0.
-  b.box({ x: 4.6, y: wh, z: -6.7 }, { x: t, y: wh, z: 0.3 }, C.room);
-  b.box({ x: 4.6, y: 0.5, z: -5.7 }, { x: t, y: 0.5, z: 0.7 }, C.room);
-  b.box({ x: 4.6, y: 2.2, z: -5.7 }, { x: t, y: 0.4, z: 0.7 }, C.room);
-  b.box({ x: 4.6, y: wh, z: -4.7 }, { x: t, y: wh, z: 0.3 }, C.room);
-  b.box({ x: 4.6, y: wh, z: -2.85 }, { x: t, y: wh, z: 0.35 }, C.room);
-  b.box({ x: 4.6, y: 2.35, z: -3.8 }, { x: t, y: 0.25, z: 0.6 }, C.room); // above the door
-  // Front wall at z = -2.5 with a window x 5.6..7.0.
-  b.box({ x: 5.1, y: wh, z: -2.5 }, { x: 0.5, y: wh, z: t }, C.room);
-  b.box({ x: 6.3, y: 0.5, z: -2.5 }, { x: 0.7, y: 0.5, z: t }, C.room);
-  b.box({ x: 6.3, y: 2.2, z: -2.5 }, { x: 0.7, y: 0.4, z: t }, C.room);
-  b.box({ x: 7.5, y: wh, z: -2.5 }, { x: 0.5, y: wh, z: t }, C.room);
-  b.box({ x: 7.95, y: wh, z: -4.75 }, { x: 0.05, y: wh, z: 2.25 }, C.room); // outer wall
-  // Shelves.
-  b.box({ x: 6.3, y: 0.55, z: -6.75 }, { x: 1.4, y: 0.04, z: 0.25 }, C.shelf);
-  b.box({ x: 6.3, y: 1.25, z: -6.75 }, { x: 1.4, y: 0.04, z: 0.25 }, C.shelf);
+  // Breakable railing around the rim, with gaps where the belts come in.
+  const r = PIT + 0.12;
+  const seg = (PIT * 2 + 0.24) / 4; // four sections per side
+  const railHalf = { x: seg / 2 - 0.02, y: 0.42, z: 0.04 };
+  for (let i = 0; i < 4; i++) {
+    const t = -r + seg * (i + 0.5);
+    b.rail({ x: t, y: 0.42, z: r }, railHalf, C.rail); // front: full
+    if (i === 0 || i === 3) {
+      b.rail({ x: t, y: 0.42, z: -r }, railHalf, C.rail); // back: gap for the back belt
+      b.rail({ x: -r, y: 0.42, z: t }, { x: railHalf.z, y: railHalf.y, z: railHalf.x }, C.rail); // left: gap for the left belt
+      b.rail({ x: r, y: 0.42, z: t }, { x: railHalf.z, y: railHalf.y, z: railHalf.x }, C.rail); // right
+    }
+  }
+
+  // ---------------------------------------------------------------- conveyor belts into the pit
+  const by = BELT_TOP - BELT_HALF_H;
+  b.box({ x: -5.3, y: by, z: 0 }, { x: 3.3, y: BELT_HALF_H, z: 1 }, C.belt, { flow: { x: BELT_SPEED, z: 0 }, friction: 1.2 });
+  b.box({ x: 5.3, y: by, z: 0 }, { x: 3.3, y: BELT_HALF_H, z: 1 }, C.belt, { flow: { x: -BELT_SPEED, z: 0 }, friction: 1.2 });
+  b.box({ x: 0, y: by, z: -5 }, { x: 1, y: BELT_HALF_H, z: 3 }, C.belt, { flow: { x: 0, z: BELT_SPEED }, friction: 1.2 });
+  // Chutes the belts feed out of.
+  b.box({ x: -8.75, y: 0.9, z: 0 }, { x: 0.25, y: 0.9, z: 1.15 }, C.iron);
+  b.box({ x: 8.75, y: 0.9, z: 0 }, { x: 0.25, y: 0.9, z: 1.15 }, C.iron);
+  b.box({ x: 0, y: 1.4, z: -7.9 }, { x: 1.15, y: 0.5, z: 0.15 }, C.iron);
+
+  // ---------------------------------------------------------------- walls
+  b.box({ x: 0, y: 2.5, z: -8.25 }, { x: 9.2, y: 2.5, z: 0.25 }, C.wall); // back (tall)
+  const ph = 0.4;
+  b.box({ x: 0, y: ph, z: 7.1 }, { x: 9.2, y: ph, z: 0.1 }, C.parapet); // front
+  b.box({ x: -9.1, y: ph, z: -0.6 }, { x: 0.1, y: ph, z: 7.6 }, C.parapet); // left
+  b.box({ x: 9.1, y: ph, z: -0.6 }, { x: 0.1, y: ph, z: 7.6 }, C.parapet); // right
+  for (const [x, z, hx, hz] of [[0, 7.1, 9.2, 0.13], [-9.1, -0.6, 0.13, 7.6], [9.1, -0.6, 0.13, 7.6]]) {
+    b.box({ x, y: ph * 2 + 0.03, z }, { x: hx, y: 0.03, z: hz }, C.stripe);
+  }
+  // Pipes along the back wall.
+  b.box({ x: 0, y: 3.6, z: -7.85 }, { x: 9, y: 0.16, z: 0.16 }, C.pipeA);
+  b.box({ x: 0, y: 4.3, z: -7.8 }, { x: 9, y: 0.22, z: 0.22 }, C.pipeB);
+  for (const x of [-6, -3, 3, 6]) b.box({ x, y: 2.2, z: -7.85 }, { x: 0.14, y: 2, z: 0.14 }, C.pipeA);
+
+  // ---------------------------------------------------------------- raised platforms (back corners) with ramps
+  for (const s of [-1, 1]) {
+    b.box({ x: s * 6.6, y: 1.7, z: -6.6 }, { x: 2.4, y: 0.1, z: 1.4 }, C.grate);
+    for (const [px, pz] of [[s * 4.4, -5.4], [s * 4.4, -7.8]]) b.box({ x: px, y: 0.8, z: pz }, { x: 0.1, y: 0.8, z: 0.1 }, C.iron);
+    // Ramp down the side wall toward the front (high end at the platform).
+    b.box({ x: s * 8.1, y: 0.86, z: -3.3 }, { x: 0.7, y: 0.08, z: 2.1 }, C.grate, { rotX: 0.44 });
+  }
+
+  // ---------------------------------------------------------------- hood above the pit (scenery)
+  b.box({ x: 0, y: 6.6, z: 0 }, { x: 2.6, y: 0.25, z: 2.6 }, C.iron);
+  b.box({ x: 0, y: 8.2, z: 0 }, { x: 0.9, y: 1.4, z: 0.9 }, C.rust);
 
   // ---------------------------------------------------------------- loose crates
-  b.crate({ x: 3.2, y: 0.4, z: 2.6 }, 0.35, C.crate);
-  b.crate({ x: -3.5, y: 0.4, z: -1.5 }, 0.35, C.crate);
-  b.crate({ x: -6.2, y: 2.4, z: -6 }, 0.3, C.crate);
-  b.crate({ x: 6.8, y: 0.4, z: -4.2 }, 0.3, C.crate);
-
-  // ---------------------------------------------------------------- weapons
-  b.pickup('pistol', { x: -6.3, y: 2.0, z: -4.2 }); // on the catwalk
-  b.pickup('shotgun', { x: 6.2, y: 0, z: -5.6 }); // in the side room
-  b.pickup('pistol', { x: 4.5, y: 0, z: 3.2 });
-  b.pickup('grenade', { x: -3, y: 0, z: -5.6 }); // by the furnace
+  b.crate({ x: -6.5, y: 0.4, z: 4.5 }, 0.35, C.crate);
+  b.crate({ x: 6.8, y: 0.4, z: 3.8 }, 0.35, C.crate);
+  b.crate({ x: -6.5, y: 2.2, z: -6.8 }, 0.3, C.crate);
+  b.crate({ x: 3.6, y: 0.4, z: -5.8 }, 0.3, C.crate);
 }
 
 export function inBox(p: V3, b: Box3) {
   return p.x >= b.min.x && p.x <= b.max.x && p.y >= b.min.y && p.y <= b.max.y && p.z >= b.min.z && p.z <= b.max.z;
+}
+
+/** The belt under a point (feet height), or null. */
+export function beltAt(p: V3): Belt | null {
+  for (const b of INCINERATOR.belts) {
+    if (p.x > b.box.min.x && p.x < b.box.max.x && p.z > b.box.min.z && p.z < b.box.max.z && p.y > -0.15 && p.y < 0.45) return b;
+  }
+  return null;
 }

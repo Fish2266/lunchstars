@@ -225,7 +225,7 @@ async function main() {
         }
       }
     }
-    effects.update(frameDt, transforms, { state: sim.furnace.state, mouth: INCINERATOR.furnaceMouth });
+    effects.update(frameDt, transforms, { state: sim.furnace.state, center: INCINERATOR.pitCenter, half: INCINERATOR.pitHalf });
     renderer.setFurnace(sim.furnace.state);
     matchHud.update(realDt);
     gore.update(frameDt, transforms);

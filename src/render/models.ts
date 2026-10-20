@@ -202,7 +202,8 @@ export function buildModel(e: EntityDesc): THREE.Object3D {
     case 'shotgun': g = shotgun(); break;
     case 'grenade': g = grenade(false); break;
     case 'grenadeLive': g = grenade(true); break;
-    case 'belt': g = belt(s.kind === 'box' ? s : { hx: 1, hy: 0.2, hz: 3 }); break;
+    case 'belt': g = belt(s.kind === 'box' ? s : { hx: 1, hy: 0.2, hz: 3 }, e.flow ?? { x: 0, z: -1 }); break;
+    case 'rail': g = railing(s.kind === 'box' ? s : { hx: 0.5, hy: 0.4, hz: 0.04 }); break;
     case 'head': g = head(s.kind === 'ball' ? s.r : 0.14, e.color); break;
     case 'torso': {
       // A round bean instead of a box, overlapping the hips so the body reads as one blob.
@@ -247,40 +248,73 @@ export function buildModel(e: EntityDesc): THREE.Object3D {
 
 // ------------------------------------------------------------------ conveyor belt
 
-/** Rubber belt with yellow chevrons, drawn once to a canvas; its offset scrolls to show the belt moving. */
-const BELT_TEX = (() => {
+/** Rubber belt with yellow chevrons pointing the way it moves; the texture scrolls to show it moving. */
+function beltTexture(dir: '>' | '<' | '^' | 'v') {
   const c = document.createElement('canvas');
   c.width = 64; c.height = 64;
   const x = c.getContext('2d')!;
   x.fillStyle = '#26272b'; x.fillRect(0, 0, 64, 64);
   x.strokeStyle = '#3a3b40'; x.lineWidth = 2;
-  for (let i = 0; i < 64; i += 8) { x.beginPath(); x.moveTo(0, i); x.lineTo(64, i); x.stroke(); }
+  for (let i = 0; i < 64; i += 8) {
+    x.beginPath();
+    if (dir === '>' || dir === '<') { x.moveTo(i, 0); x.lineTo(i, 64); } else { x.moveTo(0, i); x.lineTo(64, i); }
+    x.stroke();
+  }
   x.strokeStyle = '#e3b21b'; x.lineWidth = 7;
-  x.beginPath(); x.moveTo(6, 44); x.lineTo(32, 18); x.lineTo(58, 44); x.stroke();
+  x.beginPath();
+  // Canvas y runs down, which is -v on the texture.
+  if (dir === '^') { x.moveTo(6, 44); x.lineTo(32, 18); x.lineTo(58, 44); }
+  if (dir === 'v') { x.moveTo(6, 20); x.lineTo(32, 46); x.lineTo(58, 20); }
+  if (dir === '>') { x.moveTo(20, 6); x.lineTo(46, 32); x.lineTo(20, 58); }
+  if (dir === '<') { x.moveTo(44, 6); x.lineTo(18, 32); x.lineTo(44, 58); }
+  x.stroke();
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
-})();
-let beltSpeed = 1.5;
-export function setBeltSpeed(v: number) { beltSpeed = v; }
+}
 
-function belt(b: { hx: number; hy: number; hz: number }) {
-  const tex = BELT_TEX.clone();
-  tex.repeat.set(1, (b.hz * 2) / (b.hx * 2));
-  tex.needsUpdate = true;
+const beltTextures: { tex: THREE.Texture; du: number; dv: number }[] = [];
+export function setBeltSpeed(_v: number) { /* belts carry their own speed now (EntityDesc.flow) */ }
+
+function belt(b: { hx: number; hy: number; hz: number }, flow: { x: number; z: number }) {
+  // On a box's top face u runs along +x and v along -z.
+  const alongX = b.hx > b.hz;
+  const width = (alongX ? b.hz : b.hx) * 2;
+  const dir = alongX ? (flow.x > 0 ? '>' : '<') : (flow.z > 0 ? 'v' : '^');
+  const tex = beltTexture(dir);
+  tex.repeat.set((b.hx * 2) / width, (b.hz * 2) / width);
+  // Pattern speed in texture units per second (offset moves opposite to the pattern).
+  beltTextures.push({ tex, du: -(flow.x / (b.hx * 2)) * tex.repeat.x, dv: (flow.z / (b.hz * 2)) * tex.repeat.y });
   const top = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.8 });
   const side = new THREE.MeshStandardMaterial({ color: 0x1c1d20, roughness: 0.7, metalness: 0.4 });
   // Box faces: +x, -x, +y (top), -y, +z, -z.
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.hx * 2, b.hy * 2, b.hz * 2), [side, side, top, side, side, side]);
-  beltTextures.push({ tex, length: b.hz * 2 });
-  return mesh;
+  return new THREE.Mesh(new THREE.BoxGeometry(b.hx * 2, b.hy * 2, b.hz * 2), [side, side, top, side, side, side]);
 }
-const beltTextures: { tex: THREE.Texture; length: number }[] = [];
+
+/** Pit railing section: two posts and two bars (the collider is a simple panel). */
+const RAIL_MAT = mat(0xe3b21b, { roughness: 0.45, metalness: 0.3 });
+function railing(b: { hx: number; hy: number; hz: number }) {
+  const alongX = b.hx > b.hz;
+  const len = (alongX ? b.hx : b.hz) * 2;
+  const g = new THREE.Group();
+  const bar = (y: number, t: number) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(alongX ? len : t, t, alongX ? t : len), RAIL_MAT);
+    m.position.y = y;
+    g.add(m);
+  };
+  bar(b.hy - 0.04, 0.07);
+  bar(0, 0.05);
+  for (const s of [-1, 1]) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.07, b.hy * 2, 0.07), RAIL_MAT);
+    if (alongX) post.position.x = s * (len / 2 - 0.04); else post.position.z = s * (len / 2 - 0.04);
+    g.add(post);
+  }
+  return g;
+}
 
 /** Per-frame model animation (blinking live grenades, moving belts). */
 export function animateModels(time: number) {
   LIVE_GRENADE.emissiveIntensity = Math.sin(time * 18) > 0 ? 1.4 : 0;
-  // The belt moves toward -z: on the box's top face, v runs along +z... so scroll v forward.
-  for (const b of beltTextures) b.tex.offset.y = ((time * beltSpeed) / b.length) * b.tex.repeat.y;
+  for (const b of beltTextures) { b.tex.offset.x = time * b.du; b.tex.offset.y = time * b.dv; }
 }

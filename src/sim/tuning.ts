@@ -97,12 +97,15 @@ export const tuning = {
   koMinThreshold: 0.35,
   koMash: 0.06, // seconds cut from a knockout per button press
 
-  // Incinerator furnace burst.
-  furnaceEvery: 9, // seconds between bursts
-  furnaceWarn: 1.3, // glow before it blows
-  furnacePush: 7, // m/s out of the mouth
-  furnaceLift: 4,
-  furnaceKo: 45,
+  // Incinerator: pit flare, railing, belt guns.
+  furnaceEvery: 11, // seconds between pit flares
+  furnaceWarn: 1.4, // glow before it erupts
+  furnacePush: 5, // m/s outward from the pit
+  furnaceLift: 6,
+  furnaceKo: 40,
+  railBreakSpeed: 4.2, // something hitting the railing this fast breaks it
+  railHp: 40, // knockback the railing soaks up from shots/punches before breaking
+  gunEvery: 3.2, // average seconds between guns dropping onto a belt
 
   // World.
   gravity: -18,

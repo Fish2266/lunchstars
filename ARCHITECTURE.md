@@ -5,7 +5,8 @@ src/
   sim/        PURE simulation — no DOM, no Three rendering, no networking
     sim.ts      World, arena, fixed-step loop, weapons/pickups/grenades, SimEvents, transform snapshot
     weapons.ts  Weapon, explosive, and punch definitions (feel numbers, edited live)
-    incinerator.ts  The map: geometry via an ArenaBuilder, plus hazard volumes (fire, belt, burst) the sim uses
+    incinerator.ts  The map: geometry via an ArenaBuilder (boxes, crates, breakable rails), plus hazard data the sim
+                uses (fire volume, belts with velocity + spawn points, flare volume)
     ragdoll.ts  Active ragdoll: bodies, joints, balance/pose PD controllers, walk cycle, grab
     tuning.ts   Every feel number (edited live by the debug panel)
     input.ts    PlayerInput — the only thing a player sends to the sim
@@ -80,6 +81,6 @@ npm run typecheck
 
 ## Rounds and hazards
 - `Sim.match` is a small state machine: practice | countdown | playing | roundOver | matchOver. `startMatch()` / `setPractice()`. Elimination (`eliminate`) parks the ragdoll out of the world (`Ragdoll.setActive(false)`); a new round `resetAll()`s everything and reactivates everyone.
-- Hazards live in `Sim.updateHazards` and read volumes from the map module: belt push (limp bodies, props, guns), crate spawner, fire volume, and the furnace burst cycle (`Sim.furnace`, broadcast as `furnace` events).
+- Hazards live in `Sim.updateHazards` and read data from the map module: belt pushes (limp bodies, props, guns), gun + crate spawners on the belts, breakable rails (`contactPairsWith` speed check, or hit damage in `hitscan`; broken rails become dynamic and burn in the pit), the fire volume, and the pit flare cycle (`Sim.furnace`, broadcast as `furnace` events).
 - `Ragdoll.surfaceVelocity` tells a character what moving surface is under them: planted feet ride along and walking is relative to it.
 - Match/round events (`countdown`, `roundStart`, `eliminated`, `roundOver`, `matchOver`) drive the HUD; they'll go over the reliable channel in multiplayer.

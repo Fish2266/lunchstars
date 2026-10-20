@@ -67,6 +67,13 @@ export class Effects {
         // Spent guns lie there smoking until they vanish, so it's obvious they're empty.
         if (e.empty && e.entity >= 0) this.smokers.push({ entity: e.entity, t: 0, acc: 0 });
         break;
+      case 'railBreak':
+        this.puff(e.pos, 0.35, 0xffe08a, 0.18);
+        this.shake = Math.max(this.shake, 0.2);
+        break;
+      case 'gunSpawn':
+        this.puff(e.pos, 0.3, 0xdddddd, 0.3);
+        break;
       case 'pickup':
         this.puff({ x: e.pos.x, y: e.pos.y + 1.0, z: e.pos.z }, 0.5, 0xfff7a8, 0.25);
         break;
@@ -80,7 +87,7 @@ export class Effects {
   /**
    * Per frame. `transforms` lets smoke follow the spent gun it rises from; `furnace` drives the flame jet.
    */
-  update(dt: number, transforms?: Float32Array, furnace?: { state: string; mouth: V3 }) {
+  update(dt: number, transforms?: Float32Array, furnace?: { state: string; center: V3; half: number }) {
     if (transforms) {
       for (let i = this.smokers.length - 1; i >= 0; i--) {
         const s = this.smokers[i];
@@ -94,11 +101,13 @@ export class Effects {
         }
       }
     }
-    if (furnace && furnace.state === 'burst') {
-      this.jetAcc += dt * 70;
+    if (furnace) {
+      // Idle: flames licking up out of the pit. Warning: more of them. Burst: a column erupting.
+      const burst = furnace.state === 'burst';
+      this.jetAcc += dt * (burst ? 90 : furnace.state === 'warn' ? 30 : 12);
       while (this.jetAcc >= 1) {
         this.jetAcc -= 1;
-        this.flameBlob(furnace.mouth);
+        this.flameBlob(furnace.center, furnace.half, burst);
       }
     }
     this.time += dt;
@@ -160,13 +169,15 @@ export class Effects {
     });
   }
 
-  /** One blob of the furnace's flame jet, shooting out of the mouth along +z. */
-  private flameBlob(mouth: V3) {
+  /** One blob of flame rising out of the pit (a big fast column during a burst, embers while it warns). */
+  private flameBlob(center: V3, half: number, burst: boolean) {
     const mat = new THREE.MeshBasicMaterial({ color: 0xffb040, transparent: true, depthWrite: false });
     const m = new THREE.Mesh(this.puffGeo, mat);
-    const vx = (Math.random() - 0.5) * 1.6, vy = 0.6 + Math.random() * 1.6, vz = 5 + Math.random() * 3;
-    const start = { x: mouth.x + (Math.random() - 0.5) * 2, y: mouth.y + (Math.random() - 0.5) * 1.2, z: mouth.z };
-    const life = 0.5 + Math.random() * 0.25;
+    const start = { x: center.x + (Math.random() - 0.5) * half * 1.8, y: center.y - 1.3, z: center.z + (Math.random() - 0.5) * half * 1.8 };
+    const out = burst ? 1.5 : 0.3;
+    const vx = (start.x - center.x) * out + (Math.random() - 0.5), vz = (start.z - center.z) * out + (Math.random() - 0.5);
+    const vy = burst ? 7 + Math.random() * 4 : 1.4 + Math.random() * 1.2;
+    const life = burst ? 0.55 + Math.random() * 0.25 : 0.9;
     this.add(m, life, (t) => {
       const s = t * life;
       m.position.set(start.x + vx * s, start.y + vy * s, start.z + vz * s);

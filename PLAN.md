@@ -67,15 +67,16 @@ Gang Beasts PC uses one input per hand (tap = punch, hold = grab). We use:
 - Punches and bullets are swept spheres (punch 0.28 m, pistol 6 cm, pellets 4.5 cm), so close-range near misses count. Punch reach ≈ 1.3 m chest-to-chest.
 - The crosshair turns into a yellow ring whenever a punch would land (same sweep as the real punch).
 
-## Phase 4: the Incinerator (done, first pass)
-Inspired by the Gang Beasts map: an industrial room on a ledge with a furnace at the back fed by a conveyor.
-- Elimination: over the waist-high parapet (or through the gap at front-left) → fall; into the furnace mouth → incinerated. In a match you're out for the round; Practice (panel) respawns instead.
-- Conveyor (moving hazard): low enough to walk onto; carries anything on it into the furnace at 1.5 m/s. Standing players walk relative to it (you can walk off); limp bodies get dragged. Crates drop onto it every ~5 s.
-- Furnace burst (survivable hazard, replaces spikes): every 9 s it glows for 1.3 s, then blasts flame over the belt: big push out of the mouth + 45 KO.
-- Catwalk with ramp (left), side room with door/windows and guns (right).
-- Rounds: 3-2-1 countdown (frozen), last one standing, first to 3 wins, rematch with Jump (or auto after 12 s). KO escalation resets each round. Score pips, banners, kill feed, slow-mo on eliminations, spectate the survivor.
+## Phase 4: the Incinerator (done, second pass — map overhaul)
+A factory floor around a central fire pit.
+- Fire pit in the middle: fall below the rim → incinerated. Ringed by yellow railing sections that break when a body slams into them (> 4.2 m/s) or after enough shots/punches (40 knockback), then tumble in. Railing rebuilds each round.
+- Three floor-flush conveyor belts (left, right, back) run into the pit at 1.6 m/s. You can walk on them (walking is relative to the belt) and step off; limp bodies, crates and guns get carried in.
+- Guns only arrive on the belts (every ~3 s: 50% pistol, 30% shotgun, 20% grenade), riding toward the fire — grab one before it goes in.
+- Pit flare (survivable hazard): every 11 s it glows/embers for 1.4 s, then erupts — blasts anyone near the rim up and outward, +40 KO.
+- Raised platforms with ramps in the back corners, a tall back wall with pipes, waist-high walls elsewhere (over them = fall).
+- Rounds: 3-2-1 countdown, last one standing, first to 3, rematch with Jump. KO escalation resets each round. Practice mode in the panel.
 - Carrying: anything you hold (a KO'd player, a crate) is partly lifted and pulled along with you.
-- Bot: avoids the furnace/belt/edges, and tries to drag KO'd players onto the belt (works sometimes; it's slow against a 4 s knockout).
+- Bot: grabs guns off the belts, avoids the pit and edges, and drags KO'd players onto the nearest belt (works reliably now that belts are flush).
 - Empty guns smoke on the ground until they vanish; blood puddles fade out (and fade away between rounds).
 
 ## Known feel issues / tuning backlog
@@ -84,4 +85,3 @@ Inspired by the Gang Beasts map: an industrial room on a ledge with a furnace at
 - Slight residual wobble (~5°) after recovering from a knockdown.
 - Aiming arms sway ±8° for ~0.7 s after a fast flick (cosmetic: shots use the crosshair aim, not the arm).
 - Weapon sliders aren't saved to localStorage yet (only `tuning` is).
-- Bot hauling to the furnace only succeeds sometimes before the target wakes up.

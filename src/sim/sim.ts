@@ -6,7 +6,7 @@ import { emptyInput, type PlayerInput } from './input';
 import { Ragdoll, worldToLocal, type ArmMode } from './ragdoll';
 import { tuning } from './tuning';
 import { explosive, handling, PICKUP_RESPAWN, punch, WEAPON_KINDS, weapons, type WeaponKind } from './weapons';
-import { buildIncinerator, inBox, INCINERATOR, type ArenaBuilder } from './incinerator';
+import { beltAt, buildIncinerator, inBox, INCINERATOR, type ArenaBuilder } from './incinerator';
 
 export const TICK_RATE = 60;
 export const DT = 1 / TICK_RATE;
@@ -28,9 +28,11 @@ export interface EntityDesc {
   model?: ModelKind;
   /** Glow strength for static level pieces (furnace fire). */
   emissive?: number;
+  /** For conveyor belts: surface velocity, so the renderer can scroll the belt the right way. */
+  flow?: { x: number; z: number };
 }
 
-export type ModelKind = WeaponKind | 'grenadeLive' | 'head' | 'torso' | 'hips' | 'limb' | 'forearm' | 'shin' | 'belt';
+export type ModelKind = WeaponKind | 'grenadeLive' | 'head' | 'torso' | 'hips' | 'limb' | 'forearm' | 'shin' | 'belt' | 'rail';
 
 export type V3 = { x: number; y: number; z: number };
 export type HitCause = 'punch' | 'shot' | 'pellet' | 'blast' | 'bonk' | 'shove' | 'flame';
@@ -52,6 +54,8 @@ export type SimEvent =
   | { type: 'drop'; player: number; weapon: WeaponKind; thrown: boolean; entity: number; empty: boolean }
   | { type: 'eliminated'; player: number; cause: 'fall' | 'fire'; pos: V3 }
   | { type: 'burn'; pos: V3 }
+  | { type: 'railBreak'; pos: V3 }
+  | { type: 'gunSpawn'; weapon: WeaponKind; pos: V3 }
   | { type: 'furnace'; state: FurnaceState }
   | { type: 'countdown'; round: number }
   | { type: 'roundStart'; round: number }
@@ -192,6 +196,9 @@ export class Sim {
   /** Crates that come out onto the conveyor and ride into the furnace. */
   private beltCrates: { body: RAPIER_NS.RigidBody; active: boolean }[] = [];
   private beltTimer = 2;
+  private gunTimer = 1.5;
+  /** Breakable pit railing sections. */
+  private rails: { body: RAPIER_NS.RigidBody; collider: RAPIER_NS.Collider; broken: boolean; hp: number; pos: V3 }[] = [];
   readonly furnace = { state: 'idle' as FurnaceState, timer: 8, hit: new Set<number>() };
   /** Rounds: last one standing wins, first to `winsToWin` wins the match. 'practice' = respawn, no rounds. */
   readonly match = {
@@ -251,11 +258,7 @@ export class Sim {
       ko: 0, sinceHit: 99, koTimer: 0, koCount: 0, hitsTaken: 0, mashPrev: false,
     });
     // Standing on the conveyor carries your planted feet along.
-    r.surfaceVelocity = (p) => {
-      const b = INCINERATOR.belt;
-      return p.x > b.min.x && p.x < b.max.x && p.z > b.min.z && p.z < b.max.z && p.y > 0.12 && p.y < 0.6
-        ? { x: 0, z: -INCINERATOR.beltSpeed } : null;
-    };
+    r.surfaceVelocity = (p) => beltAt(p)?.vel ?? null;
     if (this.match.phase !== 'practice') this.match.alive.add(id);
     // Reaching hands pick guns up instead of latching onto them.
     r.ignoreGrab = (c) => this.loose.some((g) => g.active && g.collider.handle === c.handle);
@@ -294,9 +297,11 @@ export class Sim {
     for (const g of this.grenades) this.deactivateGrenade(g);
     for (const g of this.loose) this.deactivateLoose(g);
     for (const c of this.beltCrates) this.deactivateBeltCrate(c);
-    this.beltTimer = 2;
+    this.beltTimer = 3;
+    this.gunTimer = 1.5;
     this.furnace.state = 'idle';
-    this.furnace.timer = 8;
+    this.furnace.timer = tuning.furnaceEvery;
+    for (const r of this.rails) this.repairRail(r);
   }
 
   step(inputs: ReadonlyMap<number, PlayerInput>) {
@@ -445,11 +450,15 @@ export class Sim {
 
   private updateHazards() {
     const map = INCINERATOR;
-    // Conveyor: whatever rests on it is dragged toward the furnace.
+    // Conveyors: whatever rests on a belt is dragged along it (toward the pit).
     const push = (b: RAPIER_NS.RigidBody) => {
-      if (!b.isEnabled() || !inBox(b.translation(), map.belt)) return;
+      if (!b.isEnabled()) return;
+      const p = b.translation();
+      const belt = map.belts.find((bl) => inBox(p, bl.box));
+      if (!belt) return;
       const v = b.linvel();
-      b.applyImpulse({ x: 0, y: 0, z: (-map.beltSpeed - v.z) * b.mass() * 0.35 }, true);
+      const m = b.mass() * 0.35;
+      b.applyImpulse({ x: (belt.vel.x - v.x) * m * Math.abs(Math.sign(belt.vel.x)), y: 0, z: (belt.vel.z - v.z) * m * Math.abs(Math.sign(belt.vel.z)) }, true);
     };
     // Players on their feet walk relative to the belt (see Ragdoll locomotion); only limp bodies get dragged.
     for (const r of this.players.values()) if (r.active && r.stiffness < 0.35) for (const p of r.parts.values()) push(p.body);
@@ -457,16 +466,26 @@ export class Sim {
     for (const c of this.beltCrates) if (c.active) push(c.body);
     for (const g of this.loose) if (g.active) push(g.body);
 
-    // New crates drop onto the start of the belt.
     if (this.match.phase !== 'countdown') {
+      // Guns only ever arrive on the belts, riding toward the fire.
+      this.gunTimer -= DT;
+      if (this.gunTimer <= 0) {
+        this.gunTimer = tuning.gunEvery * (0.75 + this.rand() * 0.5);
+        const belt = map.belts[Math.floor(this.rand() * map.belts.length)];
+        const roll = this.rand();
+        const kind: WeaponKind = roll < 0.5 ? 'pistol' : roll < 0.8 ? 'shotgun' : 'grenade';
+        this.spawnLoose(kind, belt.spawn);
+      }
+      // And the odd crate.
       this.beltTimer -= DT;
       if (this.beltTimer <= 0) {
-        this.beltTimer = 4.5 + this.rand() * 2;
+        this.beltTimer = 5 + this.rand() * 3;
         const c = this.beltCrates.find((x) => !x.active);
+        const belt = map.belts[Math.floor(this.rand() * map.belts.length)];
         if (c) {
           c.active = true;
           c.body.setEnabled(true);
-          c.body.setTranslation({ x: map.beltSpawn.x + (this.rand() - 0.5) * 1.2, y: map.beltSpawn.y, z: map.beltSpawn.z }, true);
+          c.body.setTranslation({ x: belt.spawn.x, y: belt.spawn.y + 0.2, z: belt.spawn.z }, true);
           c.body.setRotation(eulerYX(this.rand() * 6, 0), true);
           c.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
           c.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
@@ -474,24 +493,41 @@ export class Sim {
       }
     }
 
-    // The furnace mouth incinerates whatever goes in.
+    // Railing gives way when something slams into it hard.
+    for (const rail of this.rails) {
+      if (rail.broken) continue;
+      let hitter: RAPIER_NS.RigidBody | null = null;
+      this.world.contactPairsWith(rail.collider, (other) => {
+        const ob = other.parent();
+        if (ob && ob.isDynamic() && ob.isEnabled()) {
+          const v = ob.linvel();
+          if (Math.hypot(v.x, v.y, v.z) > tuning.railBreakSpeed) hitter = ob;
+        }
+      });
+      if (hitter) {
+        const v = (hitter as RAPIER_NS.RigidBody).linvel();
+        this.breakRail(rail, { x: v.x * 0.6, y: 1, z: v.z * 0.6 });
+      }
+    }
+
+    // The pit incinerates whatever falls in.
     for (const [id, r] of this.players) {
       if (r.active && (inBox(r.chest.translation(), map.fire) || inBox(r.pelvis.translation(), map.fire))) this.eliminate(id, 'fire');
     }
-    for (const c of this.beltCrates) {
-      if (c.active && inBox(c.body.translation(), map.fire)) { this.events.push({ type: 'burn', pos: { ...c.body.translation() } }); this.deactivateBeltCrate(c); }
-    }
-    for (const p of this.props) {
-      if (inBox(p.body.translation(), map.fire)) { this.events.push({ type: 'burn', pos: { ...p.body.translation() } }); this.resetProp(p); }
-    }
-    for (const g of this.loose) {
-      if (g.active && inBox(g.body.translation(), map.fire)) { this.events.push({ type: 'burn', pos: { ...g.body.translation() } }); this.deactivateLoose(g); }
-    }
-    for (const g of this.grenades) {
-      if (g.active && inBox(g.body.translation(), map.fire)) { this.explode({ ...g.body.translation() }); this.deactivateGrenade(g); }
+    const burn = (p: V3) => this.events.push({ type: 'burn', pos: { ...p } });
+    for (const c of this.beltCrates) if (c.active && inBox(c.body.translation(), map.fire)) { burn(c.body.translation()); this.deactivateBeltCrate(c); }
+    for (const p of this.props) if (inBox(p.body.translation(), map.fire)) { burn(p.body.translation()); this.resetProp(p); }
+    for (const g of this.loose) if (g.active && inBox(g.body.translation(), map.fire)) { burn(g.body.translation()); this.deactivateLoose(g); }
+    for (const g of this.grenades) if (g.active && inBox(g.body.translation(), map.fire)) { this.explode({ ...g.body.translation() }); this.deactivateGrenade(g); }
+    for (const r of this.rails) {
+      if (r.broken && r.body.isEnabled() && inBox(r.body.translation(), map.fire)) {
+        burn(r.body.translation());
+        r.body.setEnabled(false);
+        r.body.setTranslation({ x: 0, y: HIDDEN_Y, z: 0 }, false);
+      }
     }
 
-    // Periodic flame burst out of the mouth: it glows, then blasts everyone over the belt back out.
+    // Pit flare: it glows, then erupts and blasts everyone near the rim up and away.
     const fu = this.furnace;
     if (this.match.phase === 'countdown') return;
     fu.timer -= DT;
@@ -502,26 +538,80 @@ export class Sim {
       this.events.push({ type: 'furnace', state: fu.state });
     }
     if (fu.state === 'burst') {
+      const c = map.pitCenter;
       for (const [id, r] of this.players) {
-        if (!r.active || fu.hit.has(id) || !inBox(r.chest.translation(), map.burst)) continue;
+        if (!r.active || fu.hit.has(id) || !inBox(r.chest.translation(), map.flare)) continue;
         fu.hit.add(id);
-        for (const p of r.parts.values()) {
-          const mm = p.body.mass();
-          p.body.applyImpulse({ x: 0, y: tuning.furnaceLift * mm, z: tuning.furnacePush * mm }, true);
+        const p = r.chest.translation();
+        const d = Math.hypot(p.x - c.x, p.z - c.z) || 1;
+        const ox = (p.x - c.x) / d, oz = (p.z - c.z) / d;
+        for (const part of r.parts.values()) {
+          const mm = part.body.mass();
+          part.body.applyImpulse({ x: ox * tuning.furnacePush * mm, y: tuning.furnaceLift * mm, z: oz * tuning.furnacePush * mm }, true);
         }
         r.addStun(1.5);
         this.addKo(id, tuning.furnaceKo);
         this.events.push({
-          type: 'hit', player: id, cause: 'flame', pos: { ...r.chest.translation() }, strength: 30,
-          entity: this.entityOfBody.get(r.chest.handle) ?? -1, local: { x: 0, y: 0, z: 0 }, dir: { x: 0, y: 0.4, z: 1 },
+          type: 'hit', player: id, cause: 'flame', pos: { ...p }, strength: 30,
+          entity: this.entityOfBody.get(r.chest.handle) ?? -1, local: { x: 0, y: 0, z: 0 }, dir: { x: ox, y: 0.5, z: oz },
         });
       }
-      for (const b of [...this.props.map((p) => p.body), ...this.beltCrates.filter((c) => c.active).map((c) => c.body)]) {
-        if (fu.hit.has(-1 - b.handle) || !inBox(b.translation(), map.burst)) continue;
-        fu.hit.add(-1 - b.handle); // props share the once-per-burst set (negative keys)
-        b.applyImpulse({ x: 0, y: 4 * b.mass(), z: 8 * b.mass() }, true);
+      for (const b of [...this.props.map((p) => p.body), ...this.beltCrates.filter((x) => x.active).map((x) => x.body)]) {
+        if (fu.hit.has(-1 - b.handle) || !inBox(b.translation(), map.flare)) continue;
+        fu.hit.add(-1 - b.handle);
+        b.applyImpulse({ x: 0, y: 6 * b.mass(), z: 0 }, true);
       }
     }
+  }
+
+  /** A loaded gun dropped onto a belt (the only way guns enter the game). */
+  private spawnLoose(kind: WeaponKind, at: V3) {
+    const g = this.loose.find((x) => x.kind === kind && !x.active) ?? this.oldestLoose(kind);
+    if (!g) return;
+    for (const p of this.players.values()) p.releaseIfAttachedTo(g.body.handle);
+    g.active = true;
+    g.ammo = weapons[kind].ammo;
+    g.age = handling.pickupDelay; // grabbable straight away
+    g.thrownBy = -1;
+    g.bonkTimer = 0;
+    g.collider.setCollisionGroups(groups(WORLD_GROUP, 0xffff));
+    g.body.setEnabled(true);
+    g.body.setTranslation({ x: at.x, y: at.y, z: at.z }, true);
+    g.body.setRotation(eulerYX(this.rand() * 6, 0), true);
+    g.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    g.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    this.events.push({ type: 'gunSpawn', weapon: kind, pos: { ...at } });
+  }
+
+  private addRail(pos: V3, half: V3, color: number) {
+    const body = this.world.createRigidBody(this.R.RigidBodyDesc.fixed().setTranslation(pos.x, pos.y, pos.z));
+    const collider = this.world.createCollider(
+      this.R.ColliderDesc.cuboid(half.x, half.y, half.z).setDensity(400).setFriction(0.6)
+        .setCollisionGroups(groups(WORLD_GROUP, 0xffff))
+        .setActiveEvents(this.R.ActiveEvents.COLLISION_EVENTS),
+      body,
+    );
+    this.rails.push({ body, collider, broken: false, hp: tuning.railHp, pos: { ...pos } });
+    this.addEntity(body, { kind: 'box', hx: half.x, hy: half.y, hz: half.z }, color, 'prop', undefined, 'rail');
+  }
+
+  private breakRail(r: (typeof this.rails)[number], vel: V3) {
+    r.broken = true;
+    r.body.setBodyType(this.R.RigidBodyType.Dynamic, true);
+    r.body.setLinvel(vel, true);
+    r.body.setAngvel({ x: (this.rand() - 0.5) * 6, y: (this.rand() - 0.5) * 6, z: (this.rand() - 0.5) * 6 }, true);
+    this.events.push({ type: 'railBreak', pos: { ...r.body.translation() } });
+  }
+
+  private repairRail(r: (typeof this.rails)[number]) {
+    r.broken = false;
+    r.hp = tuning.railHp;
+    r.body.setEnabled(true);
+    r.body.setBodyType(this.R.RigidBodyType.Fixed, true);
+    r.body.setTranslation(r.pos, true);
+    r.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
+    r.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    r.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
   }
 
   private buildBeltCrates() {
@@ -618,6 +708,13 @@ export class Sim {
     const hit = { collider: found.collider, timeOfImpact: found.toi };
     const point = found.point;
     const body = hit.collider.parent();
+    const rail = this.rails.find((r) => !r.broken && r.collider.handle === hit.collider.handle);
+    if (rail) {
+      // Railing takes damage from hits; enough and it gives way.
+      rail.hp -= knockback;
+      if (rail.hp <= 0) this.breakRail(rail, { x: dir.x * 4, y: 1, z: dir.z * 4 });
+      return { hit: true, point };
+    }
     if (!body || !body.isDynamic()) return { hit: false, point };
     const strength = knockback * (1 + (falloff - 1) * (hit.timeOfImpact / range));
     const imp = { x: dir.x * strength, y: dir.y * strength + strength * lift, z: dir.z * strength };
@@ -1101,8 +1198,10 @@ export class Sim {
       this.R.ColliderDesc.cuboid(half.x, half.y, half.z).setFriction(opts.friction ?? 0.9).setCollisionGroups(groups(WORLD_GROUP, 0xffff)),
       body,
     );
-    this.addEntity(body, { kind: 'box', hx: half.x, hy: half.y, hz: half.z }, color, 'static', undefined, opts.belt ? 'belt' : undefined);
-    if (opts.emissive) this.entities[this.entities.length - 1].emissive = opts.emissive;
+    this.addEntity(body, { kind: 'box', hx: half.x, hy: half.y, hz: half.z }, color, 'static', undefined, opts.flow ? 'belt' : undefined);
+    const e = this.entities[this.entities.length - 1];
+    if (opts.emissive) e.emissive = opts.emissive;
+    if (opts.flow) e.flow = opts.flow;
   }
 
   private addCrate(pos: V3, size: number, color: number) {
@@ -1157,7 +1256,7 @@ export class Sim {
     buildIncinerator({
       box: (pos, half, color, opts) => this.addStatic(pos, half, color, opts),
       crate: (pos, size, color) => this.addCrate(pos, size, color),
-      pickup: (kind, pos) => this.addPickup(kind, pos),
+      rail: (pos, half, color) => this.addRail(pos, half, color),
     });
     this.spawns = INCINERATOR.spawns;
   }

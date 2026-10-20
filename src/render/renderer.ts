@@ -58,8 +58,8 @@ export class Renderer {
       this.scene.add(c);
     }
     // Furnace glow: a warm light in the mouth that flickers, and flares before and during a burst.
-    this.furnaceLight = new THREE.PointLight(0xff7a2a, 30, 14, 1.6);
-    this.furnaceLight.position.set(0, 1.3, -5.0);
+    this.furnaceLight = new THREE.PointLight(0xff7a2a, 30, 16, 1.5);
+    this.furnaceLight.position.set(0, 0.3, 0); // just above the fire pit
     this.scene.add(this.furnaceLight);
 
     const resize = () => {
