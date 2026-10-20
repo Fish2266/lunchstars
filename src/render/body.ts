@@ -32,6 +32,11 @@ interface PartShape {
 
 const v3 = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 
+// Elbow and knee pivots in each segment's local frame (from the joint positions in ragdoll.ts).
+const ELBOW_UPPER = 0.16, ELBOW_FORE = 0.155, ELBOW_R = 0.068;
+const KNEE_THIGH = 0.21, KNEE_SHIN = 0.25, KNEE_R = 0.086;
+
+
 /**
  * Soft shapes for each part, in the part's local frame. The torso, hips and head form one bean (the head is
  * nearly as wide as the body, no neck). Limbs taper and start inside the body so they grow out of it.
@@ -40,19 +45,22 @@ function primsFor(name: PartName): Prim[] {
   switch (name) {
     case 'pelvis': return [
       { kind: 'ellipsoid', c: v3(0, -0.01, -0.005), r: v3(0.215, 0.19, 0.18) },
-      // A soft, rounded rear: one smooth bulge, not two cheeks.
-      { kind: 'ellipsoid', c: v3(0, -0.06, -0.06), r: v3(0.2, 0.14, 0.16) },
+      // Two rounded cheeks (blended softly into the hips; the gap between them is the cleft).
+      { kind: 'ellipsoid', c: v3(0.072, -0.06, -0.08), r: v3(0.115, 0.11, 0.1) },
+      { kind: 'ellipsoid', c: v3(-0.072, -0.06, -0.08), r: v3(0.115, 0.11, 0.1) },
     ];
     case 'chest': return [{ kind: 'ellipsoid', c: v3(0, 0, 0), r: v3(0.225, 0.27, 0.185) }];
     case 'head': return [{ kind: 'ellipsoid', c: v3(0, 0.0, 0.0), r: v3(0.2, 0.2, 0.19) }];
-    case 'upperArmL': case 'upperArmR': return [{ kind: 'cone', y0: 0.15, r0: 0.088, y1: -0.1, r1: 0.07 }];
+    // Upper and lower limb segments end exactly at the elbow / knee pivot with the same radius there,
+    // so a straight limb is one clean tube and a bent one pivots around a rounded joint.
+    case 'upperArmL': case 'upperArmR': return [{ kind: 'cone', y0: 0.15, r0: 0.088, y1: -ELBOW_UPPER, r1: ELBOW_R }];
     case 'forearmL': case 'forearmR': return [
-      { kind: 'cone', y0: 0.1, r0: 0.07, y1: -0.1, r1: 0.062 },
+      { kind: 'cone', y0: ELBOW_FORE, r0: ELBOW_R, y1: -0.1, r1: 0.062 },
       { kind: 'ellipsoid', c: v3(0, -0.155, 0.005), r: v3(0.088, 0.098, 0.083) },
     ];
-    case 'thighL': case 'thighR': return [{ kind: 'cone', y0: 0.18, r0: 0.115, y1: -0.13, r1: 0.088 }];
+    case 'thighL': case 'thighR': return [{ kind: 'cone', y0: 0.18, r0: 0.115, y1: -KNEE_THIGH, r1: KNEE_R }];
     case 'shinL': case 'shinR': return [
-      { kind: 'cone', y0: 0.19, r0: 0.087, y1: -0.19, r1: 0.076 },
+      { kind: 'cone', y0: KNEE_SHIN, r0: KNEE_R, y1: -0.19, r1: 0.075 },
       { kind: 'ellipsoid', c: v3(0, -0.215, 0.05), r: v3(0.092, 0.068, 0.132) },
     ];
   }
@@ -63,7 +71,9 @@ function blendFor(name: PartName): number {
   if (name === 'chest') return 0.16;
   if (name === 'head') return 0.13;
   if (name.startsWith('thigh') || name.startsWith('upperArm')) return 0.09;
-  return 0.06; // shins and forearms join at the knee / elbow
+  // Shins and forearms meet their other half at a matching rounded end: a near-hard union there
+  // avoids the bump a soft blend would add at the elbow / knee.
+  return 0.008;
 }
 
 /** Mesh rest pose: physics rest pose with arms lifted out and legs slightly apart, so limbs don't fuse. */
@@ -102,8 +112,9 @@ function primSdf(p: Prim, q: THREE.Vector3): number {
 const _q = new THREE.Vector3();
 function partSdf(s: PartShape, p: THREE.Vector3): number {
   _q.copy(p).applyMatrix4(s.inv);
+  // Within a part (shin + foot, forearm + mitten) blend softly so feet and hands don't look stuck on.
   let d = Infinity;
-  for (const prim of s.prims) d = Math.min(d, primSdf(prim, _q));
+  for (const prim of s.prims) d = d === Infinity ? primSdf(prim, _q) : smin(d, primSdf(prim, _q), 0.04);
   return d;
 }
 
