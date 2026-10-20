@@ -4,9 +4,10 @@ import Peer, { type DataConnection } from 'peerjs';
 import { emptyInput, type PlayerInput } from '../sim/input';
 import type { Sim, SimEvent } from '../sim/sim';
 import {
-  binaryType, BUTTONS, decodeInput, encodeSnapshot, FAST_LABEL, makeRoomCode, MAX_PLAYERS, PEER_PREFIX, PROTOCOL_VERSION,
-  type ReliableMsg, type RosterEntry,
+  binaryType, BUTTONS, decodeInput, diff, FAST_LABEL, makeRoomCode, MAX_PLAYERS, PEER_PREFIX, PROTOCOL_VERSION,
+  quantizeView, roundEvents, SAME, SnapshotEncoder, type ReliableMsg, type RosterEntry,
 } from './protocol';
+import type { GameView } from '../sim/sim';
 import { forceRelay, iceServers } from './ice';
 
 interface Remote {
@@ -20,6 +21,8 @@ interface Remote {
   pending: boolean[];
   /** performance.now() of the last packet from them (closing a tab doesn't reliably fire 'close'). */
   heard: number;
+  /** The last view sent to them: the next one goes as a patch on it. */
+  sentView: GameView | null;
 }
 
 const SNAPSHOT_EVERY = 3; // ticks (60 Hz / 3 = 20 Hz)
@@ -39,7 +42,8 @@ export class NetHost {
   private nextId = 1;
   private lastSnapTick = -999;
   private lastViewTick = -999;
-  private pendingEvents: SimEvent[] = [];
+  private pendingEvents: [number, SimEvent[]][] = [];
+  private snapshots = new SnapshotEncoder();
   /** Called when someone joins or leaves (for the HUD). */
   onRosterChange: () => void = () => {};
 
@@ -111,9 +115,9 @@ export class NetHost {
     return out;
   }
 
-  /** Queue this frame's events to send. */
+  /** Queue this frame's events to send (tagged with the tick they happened by). */
   queueEvents(events: SimEvent[]) {
-    if (events.length) this.pendingEvents.push(...events);
+    if (events.length) this.pendingEvents.push([this.sim.tick, roundEvents(events)]);
   }
 
   /** Send whatever is due: snapshot, view, events. `transforms` is the full 7-floats-per-entity array. */
@@ -121,18 +125,28 @@ export class NetHost {
     const tick = this.sim.tick;
     const now = performance.now();
     for (const r of [...this.remotes.values()]) if (now - r.heard > TIMEOUT_MS) this.dropConnection(r.rel);
-    if (this.pendingEvents.length) {
-      this.sendAll({ t: 'events', tick, events: this.pendingEvents });
-      this.pendingEvents = [];
-    }
     if (tick - this.lastViewTick >= VIEW_EVERY) {
       this.lastViewTick = tick;
-      this.sendAll({ t: 'view', view: this.sim.view() });
+      // Only what changed since the last view each client got (the reliable channel keeps them in order).
+      const view = quantizeView(this.sim.view());
+      for (const r of this.remotes.values()) {
+        if (!r.rel.open) continue;
+        const d = diff(r.sentView ? { ...r.sentView, tick: 0 } : null, { ...view, tick: 0 });
+        if (d === SAME) continue;
+        r.rel.send({ t: 'view', tick, d } satisfies ReliableMsg);
+        r.sentView = view;
+      }
     }
     if (tick - this.lastSnapTick >= SNAPSHOT_EVERY) {
       this.lastSnapTick = tick;
-      const buf = encodeSnapshot(tick, this.sim.dynamicIndices(), transforms);
+      const buf = this.snapshots.encode(tick, this.sim.dynamicIndices(), transforms);
       for (const r of this.remotes.values()) if (r.fast?.open) r.fast.send(buf);
+      // Events ride along at snapshot rate: the client plays them by tick ~100 ms later anyway, so batching them
+      // costs no timing, and saves a packet per frame with events.
+      if (this.pendingEvents.length) {
+        this.sendAll({ t: 'events', batches: this.pendingEvents });
+        this.pendingEvents = [];
+      }
     }
   }
 
@@ -152,6 +166,7 @@ export class NetHost {
       const r = this.remotes.get(Number(conn.metadata?.id));
       if (!r || r.rel.peer !== conn.peer || r.fast) { conn.close(); return; }
       r.fast = conn;
+      conn.on('open', () => this.snapshots.keyframeNext());
       conn.on('data', (d) => {
         if (binaryType(d as ArrayBuffer) !== 'input') return;
         const m = decodeInput(d as ArrayBuffer);
@@ -186,8 +201,9 @@ export class NetHost {
     this.playerOf.set(conn, id);
     this.remotes.set(id, {
       id, rel: conn, fast: null, input: emptyInput(), seq: 0,
-      presses: BUTTONS.map(() => 0), pending: BUTTONS.map(() => false), heard: performance.now(),
+      presses: BUTTONS.map(() => 0), pending: BUTTONS.map(() => false), heard: performance.now(), sentView: null,
     });
+    this.snapshots.keyframeNext(); // the newcomer has no earlier snapshot to fill resting entities from
     conn.send({ t: 'welcome', v: PROTOCOL_VERSION, you: id, roster: this.roster } satisfies ReliableMsg);
     this.broadcastRoster(id);
     this.lastViewTick = -999; // send the newcomer a view right away

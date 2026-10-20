@@ -8,7 +8,7 @@ import type { GameView, SimEvent } from '../sim/sim';
 import { openPeer } from './host';
 import { hasTurn } from './ice';
 import {
-  binaryType, BUTTONS, decodeSnapshot, encodeInput, FAST_LABEL, PEER_PREFIX, PROTOCOL_VERSION,
+  binaryType, BUTTONS, decodeSnapshot, encodeInput, FAST_LABEL, patch, PEER_PREFIX, PROTOCOL_VERSION, snapshotTick,
   type ReliableMsg, type RosterEntry, type Snapshot,
 } from './protocol';
 
@@ -26,6 +26,7 @@ export class NetClient {
   /** Views and event batches from the host, released once playback reaches their tick. */
   private views: GameView[] = [];
   private shownView: GameView | null = null;
+  private lastReceivedView: GameView | null = null;
   private eventQueue: { tick: number; events: SimEvent[] }[] = [];
   private peer: Peer | null = null;
   private rel: DataConnection | null = null;
@@ -97,8 +98,15 @@ export class NetClient {
 
   private onReliable(msg: ReliableMsg) {
     if (msg.t === 'roster') this.setRoster(msg.roster);
-    else if (msg.t === 'view') { this.views.push(msg.view); if (this.views.length > 20) this.views.shift(); }
-    else if (msg.t === 'events') this.eventQueue.push({ tick: msg.tick, events: msg.events });
+    else if (msg.t === 'view') {
+      // A patch on the previous view the host sent us (in order: this channel is reliable and ordered).
+      const view = { ...(patch(this.lastReceivedView, msg.d) as GameView), tick: msg.tick };
+      this.lastReceivedView = view;
+      this.views.push(view);
+      if (this.views.length > 20) this.views.shift();
+    } else if (msg.t === 'events') {
+      for (const [tick, events] of msg.batches) this.eventQueue.push({ tick, events });
+    }
   }
 
   private setRoster(roster: RosterEntry[]) {
@@ -108,12 +116,13 @@ export class NetClient {
 
   private onBinary(buf: ArrayBuffer) {
     if (binaryType(buf) !== 'snapshot') return;
-    const s = decodeSnapshot(buf);
-    if (!s) return;
     const now = performance.now();
     this.heard = now;
-    const last = this.snaps[this.snaps.length - 1];
-    if (last && s.tick <= last.tick) return; // out of order / duplicate (the channel is unordered)
+    const last = this.snaps[this.snaps.length - 1] ?? null;
+    if (last && snapshotTick(buf) <= last.tick) return; // out of order / duplicate (the channel is unordered)
+    // Entities the host skipped (resting) are copied from the last snapshot we accepted.
+    const s = decodeSnapshot(buf, last);
+    if (!s) return;
     this.snaps.push(s);
     if (this.snaps.length > 30) this.snaps.shift();
     // Measure how fast the host's clock actually runs (smoothed: packets arrive with jitter).
@@ -139,15 +148,28 @@ export class NetClient {
     return out;
   }
 
-  /** Send this frame's input, with the running press count for each button. */
+  /**
+   * Offer this frame's input. It goes out right away if a button changed; otherwise only if it differs from the
+   * last one sent and a host tick (1/60 s) has passed — the host can't use more than one per tick, and fast
+   * monitors would otherwise send 144 a second. Unchanged input is still repeated every 100 ms, so a lost packet
+   * can't leave the host with a stale one for long.
+   */
   sendInput(input: PlayerInput) {
     if (!this.fast?.open) return;
+    let pressed = false;
     BUTTONS.forEach((k, i) => {
+      if (input[k] !== this.prevButtons[i]) pressed = true;
       if (input[k] && !this.prevButtons[i]) this.presses[i]++;
       this.prevButtons[i] = input[k];
     });
-    this.lastInput = input;
-    this.lastSent = performance.now();
+    const now = performance.now();
+    const last = this.lastInput;
+    const changed = !last || last.moveX !== input.moveX || last.moveZ !== input.moveZ
+      || last.aimYaw !== input.aimYaw || last.aimPitch !== input.aimPitch;
+    const since = now - this.lastSent;
+    if (!pressed && !(changed && since >= 1000 / 60 - 1) && since < 100) return;
+    this.lastInput = { ...input };
+    this.lastSent = now;
     this.fast.send(encodeInput(++this.seq, input, this.presses));
   }
 

@@ -33,10 +33,19 @@ src/
 - **Clients still build a `Sim`**, never stepped: it builds the same level from the same code and adds players in the
   host's roster order, so entity indices match the host's without describing entities on the wire. Static level
   transforms come from it once; everything else comes from snapshots.
-- **Two channels per client:** reliable JSON (hello/welcome, roster, `GameView` at 10 Hz, `SimEvent`s as they
-  happen) and unreliable binary (snapshots host → client every 3 ticks, inputs client → host).
-- **Snapshots carry only dynamic entities** (`sim.dynamicIndices()`): position as int16 × 500 (2 mm steps), quaternion
-  as int16 × 32767. ~100 entities with 3 players ≈ 1.4 KB per snapshot ≈ 28 KB/s per client.
+- **Two channels per client:** reliable, ordered JSON (hello/welcome, roster, `GameView` changes, `SimEvent`s) and
+  unreliable binary (`maxRetransmits: 0`; snapshots host → client every 3 ticks, inputs client → host).
+- **Bandwidth matters** because a relayed game goes through a TURN server with a data quota. Measured with one
+  client in a live match: ~17 KB/s (~60 MB/hour) including all packet overhead, down from ~30 KB/s.
+  - **Snapshots** carry only dynamic entities (`sim.dynamicIndices()`): position as int16 × 500 (2 mm steps),
+    rotation "smallest three" in 3 × 15 bits (≤0.05° error) — 12 bytes. Hidden entities cost a bit; entities
+    unchanged for 5 snapshots cost a bit until they move, with a full keyframe every 20 snapshots (and when someone
+    joins). The client fills skipped entities from the last snapshot it accepted.
+  - **The view** is quantized (timers to 0.05 s, meters to 0.5…) and sent as a patch on the last one that client
+    got (`diff` / `patch`), only when something changed — about 7 sends in 30 instead of 30, ~140 bytes each.
+  - **Events** are rounded to 1 mm and batched with snapshots, each batch tagged with its exact tick.
+  - **Inputs** go out when a button changes, or when anything changes at most once per host tick, plus a 100 ms
+    repeat — not once per rendered frame (144/s on fast monitors).
 - **Interpolation:** the client draws `INTERP_DELAY` (6 ticks) behind the newest snapshot, advancing at the host's
   measured tick rate and nudging to hold that buffer, so a slow or stuttering host doesn't make it run out.
 - **Players never disappear from the entity list.** Leaving parks the ragdoll (`sim.removePlayer`), so indices
