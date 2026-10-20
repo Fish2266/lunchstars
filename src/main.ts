@@ -55,6 +55,7 @@ async function main() {
 
   if (joinCode) {
     menu.showStatus('Joining…', `Connecting to room ${joinCode}.`, false);
+    hideLoading(); // the "Joining…" card takes over from here
     client = new NetClient();
     try {
       await client.connect(joinCode, 'Player');
@@ -366,6 +367,7 @@ async function main() {
     stats.net = mode === 'client' ? `client · ${client!.bufferedTicks.toFixed(1)} ticks buffered · host ${client!.hostTickRate.toFixed(0)} Hz` : mode === 'host' ? `host · room ${host!.code}` : 'solo';
 
     requestAnimationFrame(frame);
+    hideLoading(); // after the first frame is drawn, so the menu opens over the arena, not a blank screen
   }
   requestAnimationFrame(frame);
 
@@ -373,4 +375,18 @@ async function main() {
   Object.assign(window, { sim, tuning, weapons, explosive, bots, effects, gore, goreSettings, handling, hud, renderer, controls, net: () => ({ mode, host, client }) });
 }
 
-main();
+/** Fade out the loading screen in index.html (once). */
+function hideLoading() {
+  const el = document.getElementById('loading');
+  if (!el || el.classList.contains('done')) return;
+  el.classList.add('done');
+  setTimeout(() => el.remove(), 400);
+}
+
+main().catch((e) => {
+  // Never leave people staring at "Loading…" forever.
+  console.error(e);
+  const msg = document.querySelector('#loading .msg');
+  if (msg) msg.textContent = `Couldn't start the game: ${(e as Error).message ?? e}. Try refreshing, or another browser.`;
+  document.querySelector('#loading .bar')?.remove();
+});
