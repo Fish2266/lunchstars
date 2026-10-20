@@ -109,6 +109,9 @@ export class MatchHud {
         if (e.winner === null) this.show('DRAW', 'Nobody made it', 3.2);
         else this.show(`${this.name(e.winner).toUpperCase()} WINS`, `Round ${Number(e.round)}`, 3.2, this.color(e.winner));
         break;
+      case 'matchEnded':
+        this.show('MATCH ENDED', e.reason === 'players' ? 'Not enough players left · free play until the next match' : 'Free play until the next match', 3.5);
+        break;
       case 'matchOver':
         this.show(`${this.name(e.winner).toUpperCase()} WINS THE MATCH`,
           this.canRematch ? `Press ${keyFor('jump')} for a rematch` : 'A new match starts shortly', 999, this.color(e.winner));

@@ -131,6 +131,8 @@ async function main() {
     updateLobby();
   };
   menu.onStartMatch = () => { sim.startMatch(); gore.fadeAll(); updateLobby(); };
+  menu.onEndMatch = () => { sim.endMatch('host'); gore.fadeAll(); updateLobby(); };
+  menu.matchRunning = () => sim.match.phase !== 'practice';
   menu.onAddBot = () => {
     const id = host?.addBot('Bot');
     if (id == null) return;

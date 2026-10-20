@@ -69,6 +69,9 @@ export class Menu {
   onSolo: () => void = () => {};
   onHost: () => Promise<void> = async () => {};
   onStartMatch: () => void = () => {};
+  onEndMatch: () => void = () => {};
+  /** Whether a match (rounds) is underway, vs. free play — for the solo pause card. */
+  matchRunning: () => boolean = () => false;
   onAddBot: () => void = () => {};
   onRemoveBot: (id: number) => void = () => {};
 
@@ -141,16 +144,25 @@ export class Menu {
       this.on('[data-host]', () => this.host());
       this.on('[data-join]', join);
     } else if (this.mode === 'solo') {
+      const running = this.matchRunning();
       this.root.innerHTML = `
         <div class="card">
           <h1>LUNCH STARS</h1>
           <button class="big" data-play>Resume</button>
+          <h2>Match</h2>
+          <button class="plain" data-start>${running ? 'Restart match' : 'Start a new match'}</button>
+          ${running ? `<button class="plain" data-end>End match (free play)</button>` : ''}
+          <button class="plain" data-quit>Quit to title screen</button>
+          <h2>More</h2>
           <button class="plain" data-host>Host this as an online game</button>
           ${settingsBtn}
           <div class="error" data-error></div>
           <div class="hint">Press Esc any time to come back here.</div>
         </div>`;
       this.on('[data-play]', () => this.play());
+      this.on('[data-start]', () => { this.onStartMatch(); this.play(); });
+      this.on('[data-end]', () => { this.onEndMatch(); this.play(); });
+      this.on('[data-quit]', () => { location.href = location.pathname; });
       this.on('[data-host]', () => this.host());
     } else {
       const l = this.lobby;
@@ -169,7 +181,10 @@ export class Menu {
           <h2>Players</h2>
           ${players}
           ${isHost && l?.canAddBot ? `<button class="plain" data-bot>Add a bot</button>` : ''}
-          ${isHost ? `<button class="big" data-start>${l?.matchRunning ? 'Restart match' : 'Start match'}</button>` : ''}
+          ${isHost ? (l && l.roster.filter((r) => !r.left).length < 2
+            ? `<button class="big" disabled>Start match</button><div class="hint" style="margin-top:4px">Needs at least 2 players — wait for a friend or add a bot.</div>`
+            : `<button class="big" data-start>${l?.matchRunning ? 'Restart match' : 'Start match'}</button>`) : ''}
+          ${isHost && l?.matchRunning ? `<button class="plain" data-end>End match (back to free play)</button>` : ''}
           <button class="${isHost ? 'plain' : 'big'}" data-play>${this.playing ? 'Resume' : isHost ? 'Practice while people join' : 'Play'}</button>
           ${settingsBtn}
           <button class="plain" data-leave>${isHost ? 'Close room' : 'Leave game'}</button>
@@ -178,6 +193,7 @@ export class Menu {
       this.on('[data-copy]', () => navigator.clipboard?.writeText(link).catch(() => {}));
       this.on('[data-bot]', () => this.onAddBot());
       this.on('[data-start]', () => { this.onStartMatch(); this.play(); });
+      this.on('[data-end]', () => { this.onEndMatch(); this.play(); });
       this.on('[data-play]', () => this.play());
       this.on('[data-leave]', () => { location.href = location.pathname; });
       for (const el of this.root.querySelectorAll<HTMLButtonElement>('[data-kick]')) el.onclick = () => this.onRemoveBot(Number(el.dataset.kick));

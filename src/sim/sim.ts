@@ -70,6 +70,8 @@ export type SimEvent =
   | { type: 'roundStart'; round: number }
   | { type: 'roundOver'; round: number; winner: number | null }
   | { type: 'matchOver'; winner: number }
+  /** A match stopped early: too few players left, or whoever runs the game ended it. Back to practice. */
+  | { type: 'matchEnded'; reason: 'players' | 'host' }
   | { type: 'pickup'; player: number; weapon: WeaponKind; pos: V3 }
   | { type: 'empty'; player: number };
 
@@ -462,14 +464,30 @@ export class Sim {
     this.events.push({ type: 'countdown', round: m.round });
   }
 
+  /** Players still in the game (humans and bots; not ones who left). */
+  get presentPlayers() {
+    return this.players.size - this.left.size;
+  }
+
+  /** Stop the match early and go back to practice (free play, falling just respawns you). */
+  endMatch(reason: 'players' | 'host') {
+    if (this.match.phase === 'practice') return;
+    this.match.roundWinner = null;
+    this.match.matchWinner = null;
+    this.setPractice();
+    this.events.push({ type: 'matchEnded', reason });
+  }
+
   private updateMatch() {
     const m = this.match;
     if (m.phase === 'practice') return;
+    // Someone left and there's nobody to fight: a round could never end, so the match does.
+    if (this.presentPlayers < 2) { this.endMatch('players'); return; }
     m.timer -= DT;
     if (m.phase === 'countdown' && m.timer <= 0) {
       m.phase = 'playing';
       this.events.push({ type: 'roundStart', round: m.round });
-    } else if (m.phase === 'playing' && this.players.size - this.left.size >= 2 && m.alive.size <= 1) {
+    } else if (m.phase === 'playing' && m.alive.size <= 1) {
       const winner = m.alive.size === 1 ? [...m.alive][0] : null;
       m.roundWinner = winner;
       if (winner !== null) m.wins.set(winner, (m.wins.get(winner) ?? 0) + 1);
