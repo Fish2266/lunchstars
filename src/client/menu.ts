@@ -247,6 +247,8 @@ export class Menu {
         <div class="slider">Sensitivity <input type="range" min="0.2" max="3" step="0.05" value="${settings.sensitivity}" data-sens>
           <span data-sens-val>${settings.sensitivity.toFixed(2)}</span></div>
         <div class="slider"><label><input type="checkbox" data-invert ${settings.invertY ? 'checked' : ''}> Invert look up/down</label></div>
+        <h2>Screen</h2>
+        <div class="slider"><label><input type="checkbox" data-show-controls ${settings.showControls ? 'checked' : ''}> Show controls at the bottom of the screen</label></div>
         <div class="footer">
           <button class="plain" data-defaults>Reset to defaults</button>
           <button class="big" data-back>Done</button>
@@ -269,6 +271,11 @@ export class Menu {
     this.root.querySelector<HTMLInputElement>('[data-invert]')!.onchange = (e) => {
       settings.invertY = (e.target as HTMLInputElement).checked;
       saveSettings();
+    };
+    this.root.querySelector<HTMLInputElement>('[data-show-controls]')!.onchange = (e) => {
+      settings.showControls = (e.target as HTMLInputElement).checked;
+      saveSettings();
+      this.onBindingsChanged(); // re-renders the help line
     };
     this.root.querySelector<HTMLButtonElement>('[data-defaults]')!.onclick = () => {
       settings.bindings = structuredClone(DEFAULT_BINDINGS);

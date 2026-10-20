@@ -45,6 +45,8 @@ export const settings = {
   bindings: structuredClone(DEFAULT_BINDINGS) as Bindings,
   sensitivity: 1,
   invertY: false,
+  /** The controls reminder along the bottom-left of the screen. */
+  showControls: true,
 };
 
 export function loadSettings() {
@@ -57,6 +59,7 @@ export function loadSettings() {
     }
     if (typeof saved.sensitivity === 'number') settings.sensitivity = saved.sensitivity;
     if (typeof saved.invertY === 'boolean') settings.invertY = saved.invertY;
+    if (typeof saved.showControls === 'boolean') settings.showControls = saved.showControls;
   } catch { /* ignore */ }
 }
 

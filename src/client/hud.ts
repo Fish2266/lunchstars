@@ -2,7 +2,7 @@
 // so they work the same on a multiplayer client.
 import { PLAYER_COLORS, type GameView, type PlayerView } from '../sim/sim';
 import { weapons } from '../sim/weapons';
-import { keyFor } from './bindings';
+import { keyFor, settings } from './bindings';
 import { DEBUG } from './debug';
 
 function esc(s: unknown) {
@@ -24,6 +24,7 @@ export class Hud {
 
   /** Rebuild the help line (after rebinding keys). */
   renderHelp() {
+    this.help.style.display = settings.showControls ? '' : 'none';
     this.help.innerHTML = `<b>${keyFor('forward')}${keyFor('left')}${keyFor('back')}${keyFor('right')}</b> move · <b>${keyFor('jump')}</b> jump · `
       + `<b>${keyFor('handL')}</b> / <b>${keyFor('handR')}</b> left / right hand: tap to punch, hold to grab or hold a gun (let go = drop)<br />`
       + `Hanging on a ledge: hold <b>${keyFor('jump')}</b> to pull up, swap hands to climb · `
