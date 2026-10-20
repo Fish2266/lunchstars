@@ -12,7 +12,8 @@ src/
     effects.ts  Tracers, flashes, explosions, camera shake — driven only by SimEvents
     gore.ts     Blood fountains/splats + shell casings (pooled InstancedMeshes, client-only)
     models.ts   Display models (guns, grenade, faces); collision still uses simple shapes
-  client/     Browser-only: keyboard/mouse controls, lil-gui tuning panel, bot (makes PlayerInput like a human)
+  client/     Browser-only: controls (via bindings.ts, remappable), menu.ts (pause + settings), lil-gui tuning panel,
+              bot (makes PlayerInput like a human)
   main.ts     Wires it together: input -> sim.step (fixed 60 Hz) -> transforms -> render
 ```
 
@@ -53,6 +54,10 @@ npm run typecheck
 - Shots don't come from the gun model. They come from `ragdoll.aimOrigin()` (above the chest) along the input's aim yaw/pitch. The client turns the crosshair into that yaw/pitch by raycasting the rendered scene from the camera and aiming the origin at the hit point (`crosshairAim` in main.ts), so the over-the-shoulder camera stays accurate.
 - `Sim.hitscan` is the one knockback path: ray → impulse at the hit point scaled by the target's total mass → stun from the weapon's knockback number.
 - Grenades are a fixed pool of 12 bodies, enabled on throw, which don't collide with the thrower.
+
+## Hands
+- `PlayerInput` has `handL` / `handR` (held state), `fire`, `cycle`. The sim edge-detects presses.
+- `Fighter.hands[0|1]` each hold an item + ammo. Each tick `Sim.updateHands` sets `ragdoll.armMode[i]` to idle / reach / aim / punch, and the ragdoll drives each arm on its own. Reaching hands make grab joints; loose guns are excluded from joints (`ragdoll.ignoreGrab`) because touching one picks it up instead.
 
 ## Loose guns
 - A pool of 4 physics bodies per weapon kind (stable entity indices). Dropping/throwing enables one at the hand with the held model's transform; picking up disables it. Ammo travels with the gun.

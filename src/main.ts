@@ -2,6 +2,8 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import { Bot, type BotMode } from './client/bot';
 import { Controls } from './client/controls';
+import { keyFor, loadSettings } from './client/bindings';
+import { Menu } from './client/menu';
 import { createDebugPanel, loadSavedTuning } from './client/debug';
 import { Effects } from './render/effects';
 import { Renderer } from './render/renderer';
@@ -18,6 +20,7 @@ const DUMMY_ID = 1;
 async function main() {
   await RAPIER.init();
   loadSavedTuning();
+  loadSettings();
 
   const sim = new Sim(RAPIER);
   const me = sim.addPlayer(LOCAL_ID);
@@ -40,6 +43,7 @@ async function main() {
   const crosshair = document.getElementById('crosshair')!;
   let hitMarkerTimer = 0;
   const controls = new Controls(renderer.gl.domElement);
+  const menu = new Menu(controls, renderer.gl.domElement);
   const transforms = new Float32Array(4096 * 7);
 
   const stats = { fps: 0, stiffness: 1, grounded: '' };
@@ -75,12 +79,13 @@ async function main() {
   ef.add(explosive, 'stun', 0, 4, 0.05);
   ef.close();
   wf.add(punch, 'knockback', 0, 20, 0.5).name('punch knockback');
-  const give = { weapon: 'pistol' as WeaponKind, give: () => sim.giveWeapon(LOCAL_ID, give.weapon) };
+  // Items only stay in a hand while its key is held, so "give" drops one into your right hand — hold the right-hand key to keep it.
+  const give = { weapon: 'pistol' as WeaponKind, give: () => sim.giveWeapon(LOCAL_ID, give.weapon, 1) };
   wf.add(give, 'weapon', ['pistol', 'shotgun', 'grenade']).name('debug weapon');
-  wf.add(give, 'give').name('Give me weapon (G)');
+  wf.add(give, 'give').name('Spawn weapon at my hand');
   const botFolder = gui.addFolder('Dummy');
   botFolder.add(bot, 'mode', ['idle', 'chase', 'chase + shoot'] satisfies BotMode[]).name('behavior');
-  botFolder.add({ arm: () => sim.giveWeapon(DUMMY_ID, 'pistol') }, 'arm').name('Give dummy a pistol');
+  botFolder.add({ arm: () => sim.giveWeapon(DUMMY_ID, 'pistol', 1) }, 'arm').name('Give dummy a pistol');
   const hf = wf.addFolder('handling');
   hf.add(handling, 'dropThreshold', 5, 200, 1).name('hit to drop gun');
   hf.add(handling, 'throwSpeed', 0, 25, 0.5).name('throw speed');
@@ -92,9 +97,17 @@ async function main() {
   gf.add(goreSettings, 'amount', 0, 3, 0.05);
   gf.add({ clear: () => gore.clear() }, 'clear').name('Mop the floor');
 
+  const help = document.getElementById('help')!;
+  const renderHelp = () => {
+    help.innerHTML = `<b>${keyFor('forward')}${keyFor('left')}${keyFor('back')}${keyFor('right')}</b> move · <b>${keyFor('jump')}</b> jump · `
+      + `<b>${keyFor('handL')}</b> / <b>${keyFor('handR')}</b> left / right hand: tap to punch, hold to grab or hold a gun (let go = drop)<br />`
+      + `<b>${keyFor('fire')}</b> shoot / throw grenade · <b>${keyFor('cycle')}</b> switch hands · `
+      + `<b>${keyFor('shoveDummy')}</b> shove dummy · <b>${keyFor('reset')}</b> reset · <b>${keyFor('panel')}</b> tuning · <b>Esc</b> menu`;
+  };
+  renderHelp();
+  menu.onBindingsChanged = renderHelp;
   const hud = {
-    weapon: document.querySelector<HTMLElement>('#hud .weapon')!,
-    ammo: document.querySelector<HTMLElement>('#hud .ammo')!,
+    slots: [...document.querySelectorAll<HTMLElement>('#hud .slot')],
     stun: document.querySelector<HTMLElement>('#hud .stun')!,
   };
 
@@ -137,10 +150,9 @@ async function main() {
     const frameDt = Math.min(0.1, (now - last) / 1000);
     last = now;
 
-    if (controls.consume('KeyR')) sim.resetAll();
-    if (controls.consume('KeyF')) shoveDummy();
-    if (controls.consume('KeyG')) give.give();
-    if (controls.consume('Backquote')) gui.show(gui._hidden);
+    if (controls.consume('reset')) { sim.resetAll(); gore.clear(); }
+    if (controls.consume('shoveDummy')) shoveDummy();
+    if (controls.consume('panel')) gui.show(gui._hidden);
 
     // Fixed-timestep simulation.
     const myInput = controls.read();
@@ -198,9 +210,19 @@ async function main() {
 
     // HUD.
     const f = sim.fighters.get(LOCAL_ID)!;
-    hud.weapon.textContent = f.weapon ?? 'fists';
-    hud.ammo.textContent = f.weapon ? `${f.ammo} / ${weapons[f.weapon].ammo}` : '';
-    hud.stun.textContent = me.stiffness < 0.9 ? 'STUNNED' : '';
+    const both = !!(f.hands[0].item && f.hands[1].item);
+    for (const i of [0, 1] as const) {
+      const h = f.hands[i];
+      const el = hud.slots[i];
+      const key = keyFor(i === 0 ? 'handL' : 'handR');
+      const html = h.item
+        ? `<span class="k">${key}</span><span class="name">${h.item}</span><div class="ammo">${h.item === 'grenade' ? 'throw with ' + keyFor('fire') : `${h.ammo} / ${weapons[h.item].ammo}`}</div>`
+        : `<span class="k">${key}</span><span class="name">empty</span>`;
+      if (el.innerHTML !== html) el.innerHTML = html;
+      el.classList.toggle('active', !!h.item && f.active === i);
+      el.classList.toggle('empty', !h.item);
+    }
+    hud.stun.textContent = (both ? `${keyFor('cycle')} to switch hands   ` : '') + (me.stiffness < 0.9 ? 'STUNNED' : '');
 
     fpsFrames++; fpsTime += frameDt;
     if (fpsTime > 0.5) { stats.fps = Math.round(fpsFrames / fpsTime); fpsFrames = 0; fpsTime = 0; }

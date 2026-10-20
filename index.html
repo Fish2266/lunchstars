@@ -13,20 +13,24 @@
       #crosshair.hit { background: #ff3b3b; transform: scale(2.2) rotate(45deg); border-radius: 1px; transition: none; }
       #crosshair { transition: transform 0.12s, background 0.12s; }
       #hud { position: fixed; right: 16px; bottom: 14px; color: #fff; text-align: right; text-shadow: 0 2px 3px #000a; pointer-events: none; }
-      #hud .weapon { font-size: 22px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; }
-      #hud .ammo { font-size: 15px; opacity: 0.9; }
+      #hud .hands { display: flex; gap: 10px; justify-content: flex-end; }
+      #hud .slot { min-width: 120px; padding: 8px 12px; border-radius: 12px; background: #0005; border: 2px solid transparent; text-align: left; }
+      #hud .slot.active { border-color: #ffd54a; background: #0007; }
+      #hud .slot .k { display: inline-block; min-width: 18px; padding: 1px 6px; margin-right: 6px; border-radius: 6px; background: #fff3; font-size: 12px; font-weight: 800; text-align: center; }
+      #hud .slot .name { font-size: 18px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; }
+      #hud .slot .ammo { font-size: 13px; opacity: 0.85; }
+      #hud .slot.empty .name { opacity: 0.5; font-size: 15px; }
+      #hud .swap { font-size: 12px; opacity: 0.8; margin-top: 4px; }
       #hud .stun { color: #ffd54a; font-weight: 700; }
     </style>
   </head>
   <body>
     <div id="crosshair"></div>
-    <div id="help">
-      <b>Click</b> to lock mouse · <b>WASD</b> move · <b>Space</b> jump · hold <b>E</b> / <b>Right mouse</b> grab<br />
-     
-      <b>Left mouse</b> / <b>Q</b> shoot (punch when unarmed) · walk over or <b>grab</b> a gun to pick it up · <b>X</b> / middle mouse throw it<br />
-      <b>F</b> shove dummy · <b>R</b> reset · <b>`</b> toggle tuning panel
+    <div id="help"></div>
+    <div id="hud">
+      <div class="hands"><div class="slot" data-hand="0"></div><div class="slot" data-hand="1"></div></div>
+      <div class="stun"></div>
     </div>
-    <div id="hud"><div class="weapon"></div><div class="ammo"></div><div class="stun"></div></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

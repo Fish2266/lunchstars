@@ -3,7 +3,7 @@
 // The same code can run in single-player, on the multiplayer host, or on a Node server.
 import type RAPIER_NS from '@dimforge/rapier3d-compat';
 import { emptyInput, type PlayerInput } from './input';
-import { Ragdoll, worldToLocal } from './ragdoll';
+import { Ragdoll, worldToLocal, type ArmMode } from './ragdoll';
 import { tuning } from './tuning';
 import { explosive, handling, PICKUP_RESPAWN, punch, WEAPON_KINDS, weapons, type WeaponKind } from './weapons';
 
@@ -27,7 +27,7 @@ export interface EntityDesc {
   model?: ModelKind;
 }
 
-export type ModelKind = WeaponKind | 'grenadeLive' | 'head';
+export type ModelKind = WeaponKind | 'grenadeLive' | 'head' | 'torso' | 'hips' | 'limb' | 'forearm' | 'shin';
 
 export type V3 = { x: number; y: number; z: number };
 type Q = { x: number; y: number; z: number; w: number };
@@ -82,20 +82,37 @@ interface Prop {
   spawn: V3;
 }
 
-export interface Fighter {
-  weapon: WeaponKind | null;
+/** One hand. Index 0 = left (Q), 1 = right (E). */
+export interface HandSlot {
+  /** What this hand is holding. Items stay only while the hand's key is held. */
+  item: WeaponKind | null;
   ammo: number;
+  prevKey: boolean;
+  punchTimer: number;
+  punchCooldown: number;
+  /** Held-item models for this hand, one per kind; only the current one is shown. */
+  held: Record<WeaponKind, Virtual>;
+}
+
+export interface Fighter {
+  hands: [HandSlot, HandSlot];
+  /** Which hand's item the mouse uses. */
+  active: 0 | 1;
   cooldown: number;
   prevFire: boolean;
-  prevDrop: boolean;
-  /** Knockback taken this tick; enough of it knocks the gun loose. */
+  prevCycle: boolean;
+  /** Knockback taken this tick; enough of it knocks items loose. */
   hitAccum: number;
-  /** Who last hit us this tick (so the dropped gun flies the right way). */
+  /** Direction of the last hit this tick (so dropped items fly the right way). */
   hitDir: V3;
-  punchTimer: number;
   slot: number;
-  /** Held-weapon models, one per kind; only the current one is shown. */
-  held: Record<WeaponKind, Virtual>;
+}
+
+/** The hand whose item the mouse would use, or null if both hands are empty. */
+export function activeHand(f: Fighter): 0 | 1 | null {
+  if (f.hands[f.active].item) return f.active;
+  const other = (1 - f.active) as 0 | 1;
+  return f.hands[other].item ? other : null;
 }
 
 interface PickupSpot {
@@ -166,29 +183,40 @@ export class Sim {
     const color = PLAYER_COLORS[slot % PLAYER_COLORS.length];
     const r = new Ragdoll(this.R, this.world, id, color, { x: spawn.x, y: spawn.y + tuning.standHeight, z: spawn.z }, playerGroups(slot));
     this.players.set(id, r);
+    // Display models are soft "gummy" shapes; physics uses the plain boxes and capsules.
+    const looks: Record<string, ModelKind> = {
+      head: 'head', chest: 'torso', pelvis: 'hips', thighL: 'limb', thighR: 'limb', upperArmL: 'limb', upperArmR: 'limb',
+      forearmL: 'forearm', forearmR: 'forearm', shinL: 'shin', shinR: 'shin',
+    };
     for (const part of r.parts.values()) {
-      const s = part.def.shape;
-      this.addEntity(part.body, s, part.def.name === 'head' ? 0xffe0bd : color, 'player', id, part.def.name === 'head' ? 'head' : undefined);
+      this.addEntity(part.body, part.def.shape, color, 'player', id, looks[part.def.name]);
     }
-    const held = {} as Record<WeaponKind, Virtual>;
-    for (const k of WEAPON_KINDS) {
-      held[k] = new Virtual();
-      this.addEntity(held[k], weapons[k].shape, weapons[k].color, 'fx', id, k);
-    }
+    const makeHand = (): HandSlot => {
+      const held = {} as Record<WeaponKind, Virtual>;
+      for (const k of WEAPON_KINDS) {
+        held[k] = new Virtual();
+        this.addEntity(held[k], weapons[k].shape, weapons[k].color, 'fx', id, k);
+      }
+      return { item: null, ammo: 0, prevKey: false, punchTimer: 0, punchCooldown: 0, held };
+    };
     this.fighters.set(id, {
-      weapon: null, ammo: 0, cooldown: 0, prevFire: false, prevDrop: false, hitAccum: 0, hitDir: { x: 0, y: 0, z: 0 },
-      punchTimer: 0, slot, held,
+      hands: [makeHand(), makeHand()], active: 1, cooldown: 0, prevFire: false, prevCycle: false,
+      hitAccum: 0, hitDir: { x: 0, y: 0, z: 0 }, slot,
     });
+    // Reaching hands pick guns up instead of latching onto them.
+    r.ignoreGrab = (c) => this.loose.some((g) => g.active && g.collider.handle === c.handle);
     return r;
   }
 
-  /** Give a weapon directly (debug / tests). */
-  giveWeapon(id: number, kind: WeaponKind | null) {
+  /** Put an item straight into a hand (debug / tests). It still drops as soon as that hand's key is up. */
+  giveWeapon(id: number, kind: WeaponKind | null, hand: 0 | 1 = 1) {
     const f = this.fighters.get(id);
     if (!f) return;
-    f.weapon = kind;
-    f.ammo = kind ? weapons[kind].ammo : 0;
+    const h = f.hands[hand];
+    h.item = kind;
+    h.ammo = kind ? weapons[kind].ammo : 0;
     f.cooldown = 0;
+    if (kind && !f.hands[1 - hand].item) f.active = hand;
   }
 
   respawn(id: number) {
@@ -198,7 +226,8 @@ export class Sim {
     const s = this.spawns[slot % this.spawns.length];
     for (const other of this.players.values()) for (const b of r.bodyHandles) other.releaseIfAttachedTo(b);
     r.teleport({ x: s.x, y: s.y + tuning.standHeight + 0.3, z: s.z });
-    this.giveWeapon(id, null);
+    this.giveWeapon(id, null, 0);
+    this.giveWeapon(id, null, 1);
   }
 
   resetAll() {
@@ -214,11 +243,9 @@ export class Sim {
     for (const [id, r] of this.players) {
       const input = inputs.get(id) ?? emptyInput();
       const f = this.fighters.get(id)!;
-      f.punchTimer = Math.max(0, f.punchTimer - DT);
-      r.aimHands = f.weapon ? weapons[f.weapon].hands : f.punchTimer > 0 ? 1 : 0;
+      this.updateHands(id, r, f, input);
       r.step(input, DT);
-      this.updateFighter(id, r, f, input);
-      this.updateHandling(id, r, f, input);
+      this.updateFire(id, r, f, input);
     }
     this.world.step();
     this.tick++;
@@ -226,11 +253,11 @@ export class Sim {
     this.updateGrenades();
     this.updateLoose();
     this.updatePickups();
-    // Big hits knock the gun out of your hands.
+    // Big hits knock items out of your hands.
     for (const [id, f] of this.fighters) {
-      if (f.weapon && f.hitAccum >= handling.dropThreshold) {
+      if (f.hitAccum >= handling.dropThreshold) {
         const d = f.hitDir;
-        this.dropWeapon(id, { x: d.x * 4, y: 3, z: d.z * 4 }, false);
+        for (const i of [0, 1] as const) this.dropItem(id, i, { x: d.x * 4, y: 3, z: d.z * 4 });
       }
       f.hitAccum = 0;
     }
@@ -249,53 +276,55 @@ export class Sim {
 
   // ---------------------------------------------------------------- weapons
 
-  private updateFighter(id: number, r: Ragdoll, f: Fighter, input: PlayerInput) {
+  /** Left mouse: use the active hand's item. R: switch active hand. */
+  private updateFire(id: number, r: Ragdoll, f: Fighter, input: PlayerInput) {
     f.cooldown = Math.max(0, f.cooldown - DT);
+    const cycle = input.cycle && !f.prevCycle;
+    f.prevCycle = input.cycle;
+    if (cycle && f.hands[0].item && f.hands[1].item) f.active = (1 - f.active) as 0 | 1;
+
     const pressed = input.fire && !f.prevFire;
     f.prevFire = input.fire;
-    if (!pressed || f.cooldown > 0 || r.stiffness < 0.35 || input.grab) return;
-
+    const hi = activeHand(f);
+    if (!pressed || hi === null || f.cooldown > 0 || r.stiffness < 0.35) return;
+    f.active = hi;
+    const hand = f.hands[hi];
+    const kind = hand.item!;
     const dir = aimDir(input.aimYaw, input.aimPitch);
-    const origin = r.aimOrigin();
+    const w = weapons[kind];
+    f.cooldown = w.cooldown;
+    hand.ammo--;
 
-    if (!f.weapon) {
-      // Unarmed: a quick shove.
-      f.cooldown = punch.cooldown;
-      f.punchTimer = 0.25;
-      const res = this.hitscan(id, origin, dir, punch.range + 0.3, punch.knockback, 1, punch.lift);
-      this.events.push({ type: 'punch', player: id, to: res.point, hit: res.hit });
+    if (kind === 'grenade') {
+      // Single use: it leaves your hand live.
+      this.throwGrenade(id, r, f, dir, hi);
+      hand.item = null;
+      hand.ammo = 0;
+      if (f.hands[1 - hi].item) f.active = (1 - hi) as 0 | 1;
       return;
     }
 
-    const w = weapons[f.weapon];
-    f.cooldown = w.cooldown;
-    f.ammo--;
-    if (f.weapon === 'grenade') {
-      this.throwGrenade(id, r, f, dir);
-    } else {
-      const muzzle = this.muzzle(r, f.weapon, dir);
-      for (let i = 0; i < w.pellets; i++) {
-        const d = this.spreadDir(dir, w.spread);
-        const res = this.hitscan(id, origin, d, w.range, w.knockback, w.falloff, w.lift);
-        this.events.push({ type: 'shot', player: id, weapon: f.weapon, from: muzzle, to: res.point, hit: res.hit, first: i === 0, dir: d });
-      }
-      if (w.recoil > 0) {
-        const s = (r.totalMass / 10) * w.recoil;
-        r.chest.applyImpulse({ x: -dir.x * s, y: -dir.y * s * 0.3, z: -dir.z * s }, true);
-      }
-      // Kick the gun arm(s) up and back.
-      const arms = w.hands === 2 ? ['forearmR', 'forearmL'] as const : ['forearmR'] as const;
-      for (const a of arms) {
-        const b = r.parts.get(a)!.body;
-        const s = b.mass() * w.armKick;
-        b.applyImpulse({ x: -dir.x * s * 0.5, y: s, z: -dir.z * s * 0.5 }, true);
-      }
+    const origin = r.aimOrigin();
+    const muzzle = this.muzzle(r, kind, dir, hi);
+    for (let i = 0; i < w.pellets; i++) {
+      const d = this.spreadDir(dir, w.spread);
+      const res = this.hitscan(id, origin, d, w.range, w.knockback, w.falloff, w.lift);
+      this.events.push({ type: 'shot', player: id, weapon: kind, from: muzzle, to: res.point, hit: res.hit, first: i === 0, dir: d });
     }
-    if (f.ammo <= 0) {
+    if (w.recoil > 0) {
+      const s = (r.totalMass / 10) * w.recoil;
+      r.chest.applyImpulse({ x: -dir.x * s, y: -dir.y * s * 0.3, z: -dir.z * s }, true);
+    }
+    // Kick the gun arm up and back.
+    const fore = r.parts.get(hi === 0 ? 'forearmL' : 'forearmR')!.body;
+    const ks = fore.mass() * w.armKick;
+    fore.applyImpulse({ x: -dir.x * ks * 0.5, y: ks, z: -dir.z * ks * 0.5 }, true);
+
+    if (hand.ammo <= 0) {
       this.events.push({ type: 'empty', player: id });
       // Toss the empty gun aside (it can't be picked up, and vanishes soon).
-      if (f.weapon !== 'grenade') this.dropWeapon(id, { x: -dir.z * 2, y: 2.5, z: dir.x * 2 }, false);
-      else f.weapon = null;
+      const side = hi === 0 ? 1 : -1;
+      this.dropItem(id, hi, { x: dir.z * 2 * side, y: 2.5, z: -dir.x * 2 * side });
     }
   }
 
@@ -339,7 +368,7 @@ export class Sim {
     return res.hit ? res.point : null;
   }
 
-  private throwGrenade(id: number, r: Ragdoll, f: Fighter, dir: V3) {
+  private throwGrenade(id: number, r: Ragdoll, f: Fighter, dir: V3, _hand: 0 | 1) {
     const g = this.grenades.find((x) => !x.active);
     if (!g) return;
     // Launch from in front of the aim origin so it travels along the crosshair line, not off to the right hand's side.
@@ -420,61 +449,104 @@ export class Sim {
 
   // ---------------------------------------------------------------- loose guns
 
-  /** Throw button, and picking guns up with a grab. */
-  private updateHandling(id: number, r: Ragdoll, f: Fighter, input: PlayerInput) {
-    const pressedDrop = input.drop && !f.prevDrop;
-    f.prevDrop = input.drop;
-    if (pressedDrop && f.weapon && r.stiffness > 0.35) {
-      const d = aimDir(input.aimYaw, input.aimPitch);
-      const s = handling.throwSpeed;
-      this.dropWeapon(id, { x: d.x * s, y: d.y * s + 2.5, z: d.z * s }, true);
-      return;
+  /**
+   * Q / E. Per hand: a press with an empty hand throws a punch; holding reaches and grabs.
+   * A reaching empty hand that touches a gun picks it up, and the item stays only while the key is held.
+   * Letting go drops it, tossed along with the hand's motion.
+   */
+  private updateHands(id: number, r: Ragdoll, f: Fighter, input: PlayerInput) {
+    const keys = [input.handL, input.handR];
+    const limp = r.stiffness < 0.35;
+    for (const i of [0, 1] as const) {
+      const h = f.hands[i];
+      const key = keys[i] && !limp;
+      const pressed = key && !h.prevKey;
+      h.prevKey = key;
+      h.punchTimer = Math.max(0, h.punchTimer - DT);
+      h.punchCooldown = Math.max(0, h.punchCooldown - DT);
+
+      // Let go (or knocked silly): drop what's in the hand.
+      if (!key && h.item) {
+        const d = aimDir(input.aimYaw, Math.max(input.aimPitch, 0.1));
+        const t = limp ? 0 : handling.releaseToss;
+        this.dropItem(id, i, { x: d.x * t, y: d.y * t + 1, z: d.z * t });
+      }
+
+      if (key && !h.item) {
+        // Pick up a gun the hand is touching.
+        const hp = r.handPosition(i);
+        const near = (p: V3) => Math.hypot(hp.x - p.x, hp.y - p.y, hp.z - p.z) < handling.grabReach;
+        // Things on the floor are scooped up: the hand just has to be over them, reaching down.
+        const scoop = (p: V3) => input.aimPitch < -0.35 && Math.hypot(hp.x - p.x, hp.z - p.z) < handling.grabReach
+          && p.y < hp.y + 0.2 && hp.y - p.y < 1.1;
+        for (const g of this.loose) {
+          const gp = g.body.translation();
+          if (!g.active || g.ammo <= 0 || g.age < handling.pickupDelay || !(near(gp) || scoop(gp))) continue;
+          if (id === g.thrownBy && g.age < 1) continue;
+          this.takeLoose(id, f, i, g);
+          break;
+        }
+        if (!h.item) {
+          for (const p of this.pickups) {
+            if (p.respawn > 0 || !near(p.model.pos)) continue;
+            this.takeSpawner(id, f, i, p);
+            break;
+          }
+        }
+        // Otherwise a fresh press is a punch.
+        if (!h.item && pressed && h.punchCooldown === 0) this.throwPunch(id, r, h, i, input);
+      }
+
+      r.armMode[i] = (limp ? 'idle' : h.item ? 'aim' : h.punchTimer > 0 ? 'punch' : key ? 'reach' : 'idle') as ArmMode;
     }
-    // Grabbing a gun (floating or loose) picks it up, swapping out whatever you hold.
-    if (!input.grab || r.stiffness < 0.35) return;
-    const hands = r.handPositions();
-    const near = (p: V3) => hands.some((h) => Math.hypot(h.x - p.x, h.y - p.y, h.z - p.z) < handling.grabReach);
-    for (const g of this.loose) {
-      if (!g.active || g.ammo <= 0 || g.age < handling.pickupDelay || !near(g.body.translation())) continue;
-      if (f.weapon) this.dropWeapon(id, { x: 0, y: 2, z: 0 }, false);
-      this.takeLoose(id, f, g);
-      return;
-    }
-    for (const p of this.pickups) {
-      if (p.respawn > 0 || !near(p.model.pos)) continue;
-      if (f.weapon) this.dropWeapon(id, { x: 0, y: 2, z: 0 }, false);
-      this.takeSpawner(id, p);
-      return;
-    }
+    if (activeHand(f) !== null) f.active = activeHand(f)!;
   }
 
-  /** Turn the held weapon into a loose physics gun. `vel` is added to the hand's velocity. */
-  dropWeapon(id: number, vel: V3, thrown: boolean) {
+  private throwPunch(id: number, r: Ragdoll, h: HandSlot, i: 0 | 1, input: PlayerInput) {
+    h.punchTimer = 0.2;
+    h.punchCooldown = punch.cooldown;
+    const dir = aimDir(input.aimYaw, input.aimPitch);
+    // From the punching shoulder's side.
+    const o = r.aimOrigin();
+    const side = i === 0 ? 1 : -1;
+    const lx = Math.cos(r.yaw) * 0.22 * side, lz = -Math.sin(r.yaw) * 0.22 * side;
+    const origin = { x: o.x + lx, y: o.y - 0.32, z: o.z + lz };
+    const res = this.hitscan(id, origin, dir, punch.range + 0.3, punch.knockback, 1, punch.lift);
+    this.events.push({ type: 'punch', player: id, to: res.point, hit: res.hit });
+  }
+
+  /** Turn a hand's item into a loose physics object. `vel` is added to the hand's velocity. */
+  dropItem(id: number, hand: 0 | 1, vel: V3) {
     const f = this.fighters.get(id);
     const r = this.players.get(id);
-    if (!f || !r || !f.weapon) return;
-    const kind = f.weapon;
-    f.weapon = null;
-    this.events.push({ type: 'drop', player: id, weapon: kind, thrown });
-    if (kind === 'grenade' && f.ammo <= 0) return;
+    if (!f || !r) return;
+    const h = f.hands[hand];
+    if (!h.item) return;
+    const kind = h.item;
+    const ammo = h.ammo;
+    h.item = null;
+    h.ammo = 0;
+    if (f.hands[1 - hand].item) f.active = (1 - hand) as 0 | 1;
     const g = this.loose.find((x) => x.kind === kind && !x.active) ?? this.oldestLoose(kind);
     if (!g) return;
-    const held = f.held[kind];
-    const hv = r.parts.get('forearmR')!.body.linvel();
+    const held = h.held[kind];
+    const hv = r.parts.get(hand === 0 ? 'forearmL' : 'forearmR')!.body.linvel();
+    const v = { x: hv.x * 0.8 + vel.x, y: hv.y * 0.8 + vel.y, z: hv.z * 0.8 + vel.z };
+    const thrown = Math.hypot(v.x, v.y, v.z) > handling.bonkSpeed;
+    this.events.push({ type: 'drop', player: id, weapon: kind, thrown });
     for (const p of this.players.values()) p.releaseIfAttachedTo(g.body.handle);
     g.active = true;
-    g.ammo = f.ammo;
+    g.ammo = ammo;
     g.age = 0;
     g.thrownBy = id;
     g.bonkTimer = thrown ? 1.2 : 0;
     // Don't collide with the thrower for a moment, so it leaves the hand cleanly.
     g.collider.setCollisionGroups(groups(WORLD_GROUP, 0xffff ^ playerBit(f.slot)));
     g.body.setEnabled(true);
-    g.body.setTranslation(held.pos.y > -500 ? held.pos : r.rightHand(), true);
+    g.body.setTranslation(held.pos.y > -500 ? held.pos : r.handPosition(hand), true);
     g.body.setRotation(held.rot, true);
-    g.body.setLinvel({ x: hv.x * 0.5 + vel.x, y: hv.y * 0.5 + vel.y, z: hv.z * 0.5 + vel.z }, true);
+    g.body.setLinvel(v, true);
     g.body.setAngvel({ x: (this.rand() - 0.5) * 14, y: (this.rand() - 0.5) * 14, z: (this.rand() - 0.5) * 14 }, true);
-    f.ammo = 0;
   }
 
   private oldestLoose(kind: WeaponKind) {
@@ -483,16 +555,19 @@ export class Sim {
     return best;
   }
 
-  private takeLoose(id: number, f: Fighter, g: LooseGun) {
-    f.weapon = g.kind;
-    f.ammo = g.ammo;
-    f.cooldown = 0.15;
+  private takeLoose(id: number, f: Fighter, hand: 0 | 1, g: LooseGun) {
+    const h = f.hands[hand];
+    h.item = g.kind;
+    h.ammo = g.ammo;
+    if (!f.hands[1 - hand].item) f.active = hand;
+    f.cooldown = Math.max(f.cooldown, 0.15);
     this.events.push({ type: 'pickup', player: id, weapon: g.kind, pos: { ...g.body.translation() } });
     this.deactivateLoose(g);
   }
 
-  private takeSpawner(id: number, p: PickupSpot) {
-    this.giveWeapon(id, p.kind);
+  private takeSpawner(id: number, f: Fighter, hand: 0 | 1, p: PickupSpot) {
+    this.giveWeapon(id, p.kind, hand);
+    f.cooldown = Math.max(f.cooldown, 0.15);
     p.respawn = PICKUP_RESPAWN;
     p.model.hide();
     this.events.push({ type: 'pickup', player: id, weapon: p.kind, pos: p.pos });
@@ -536,19 +611,6 @@ export class Sim {
           }
         }
       }
-      // Walk over a loaded gun while unarmed to pick it up.
-      if (g.ammo <= 0 || g.age < handling.pickupDelay) continue;
-      for (const [id, r] of this.players) {
-        const f = this.fighters.get(id)!;
-        if (f.weapon || r.stiffness < 0.35) continue;
-        // You can't catch your own throw by walking into it straight away.
-        if (id === g.thrownBy && g.age < 1.5) continue;
-        const c = r.pelvis.translation();
-        if (Math.hypot(c.x - p.x, c.z - p.z) < 0.7 && p.y < c.y && c.y - p.y < 1.3) {
-          this.takeLoose(id, f, g);
-          break;
-        }
-      }
     }
   }
 
@@ -586,8 +648,8 @@ export class Sim {
     return out;
   }
 
-  private muzzle(r: Ragdoll, kind: WeaponKind, dir: V3): V3 {
-    const h = r.rightHand();
+  private muzzle(r: Ragdoll, kind: WeaponKind, dir: V3, hand: 0 | 1): V3 {
+    const h = r.handPosition(hand);
     const s = weapons[kind].shape;
     const len = s.kind === 'box' ? s.hz * 2 : 0;
     return { x: h.x + dir.x * len, y: h.y + dir.y * len, z: h.z + dir.z * len };
@@ -626,17 +688,9 @@ export class Sim {
         p.model.hide();
         continue;
       }
-      p.model.pos = { x: p.pos.x, y: p.pos.y + 0.55 + Math.sin(spin * 1.5) * 0.08, z: p.pos.z };
+      // Float at hand height so a reaching hand finds it.
+      p.model.pos = { x: p.pos.x, y: p.pos.y + 1.0 + Math.sin(spin * 1.5) * 0.06, z: p.pos.z };
       p.model.rot = eulerYX(spin, 0);
-      for (const [id, r] of this.players) {
-        const f = this.fighters.get(id)!;
-        if (f.weapon || r.stiffness < 0.35) continue;
-        const c = r.pelvis.translation();
-        if (Math.hypot(c.x - p.pos.x, c.z - p.pos.z) < 0.9 && Math.abs(c.y - tuning.standHeight - p.pos.y) < 1.2) {
-          this.takeSpawner(id, p);
-          break;
-        }
-      }
     }
   }
 
@@ -644,17 +698,20 @@ export class Sim {
     for (const [id, r] of this.players) {
       const f = this.fighters.get(id)!;
       const input = inputs.get(id) ?? emptyInput();
-      for (const k of WEAPON_KINDS) {
-        const v = f.held[k];
-        if (f.weapon !== k) { v.hide(); continue; }
-        const h = r.rightHand();
-        // Held guns follow the hand but point down the aim line, which reads better than following the forearm.
-        const yaw = r.yaw, pitch = input.grab ? -0.6 : input.aimPitch;
-        const d = aimDir(yaw, pitch);
-        const s = weapons[k].shape;
-        const half = s.kind === 'box' ? s.hz - 0.03 : 0;
-        v.pos = { x: h.x + d.x * half, y: h.y + d.y * half, z: h.z + d.z * half };
-        v.rot = eulerYX(yaw, -pitch);
+      for (const i of [0, 1] as const) {
+        const hand = f.hands[i];
+        for (const k of WEAPON_KINDS) {
+          const v = hand.held[k];
+          if (hand.item !== k) { v.hide(); continue; }
+          const h = r.handPosition(i);
+          // Held guns follow the hand but point down the aim line, which reads better than following the forearm.
+          const yaw = r.yaw, pitch = input.aimPitch;
+          const d = aimDir(yaw, pitch);
+          const s = weapons[k].shape;
+          const half = s.kind === 'box' ? s.hz - 0.03 : 0;
+          v.pos = { x: h.x + d.x * half, y: h.y + d.y * half, z: h.z + d.z * half };
+          v.rot = eulerYX(yaw, -pitch);
+        }
       }
     }
   }

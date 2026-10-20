@@ -1,7 +1,7 @@
 // Low-poly display models built from primitives. Pure visuals: collision still uses the simple
 // shapes in sim/weapons.ts. Every gun model points down +Z with its center where the sim's box center is.
 import * as THREE from 'three';
-import type { ModelKind } from '../sim/sim';
+import type { EntityDesc, ModelKind } from '../sim/sim';
 
 const mat = (color: number, opts: Partial<THREE.MeshStandardMaterialParameters> = {}) =>
   new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.2, ...opts });
@@ -11,7 +11,6 @@ const DARK = mat(0x15161a, { metalness: 0.4, roughness: 0.5 });
 const WOOD = mat(0x8a4b25, { roughness: 0.7, metalness: 0 });
 const BRASS = mat(0xd9a441, { metalness: 0.8, roughness: 0.3 });
 const OLIVE = mat(0x4d6b32, { roughness: 0.6, metalness: 0.1 });
-const SKIN = mat(0xffe0bd, { roughness: 0.55, metalness: 0 });
 const EYE = mat(0x15151a, { roughness: 0.2, metalness: 0 });
 const EYE_SHINE = new THREE.MeshBasicMaterial({ color: 0xffffff });
 /** Shared, so all live grenades blink together (see `animateModels`). */
@@ -76,35 +75,100 @@ function grenade(live: boolean) {
   return g;
 }
 
+// ------------------------------------------------------------------ gummy characters
+
+const gummyCache = new Map<number, THREE.Material>();
+/** Glossy, candy-like material: clearcoat for the wet shine, sheen for the soft rim. */
+function gummy(color: number) {
+  let m = gummyCache.get(color);
+  if (!m) {
+    const c = new THREE.Color(color);
+    m = new THREE.MeshPhysicalMaterial({
+      color: c, roughness: 0.32, metalness: 0,
+      clearcoat: 1, clearcoatRoughness: 0.12,
+      sheen: 1, sheenRoughness: 0.4, sheenColor: c.clone().lerp(new THREE.Color(0xffffff), 0.5),
+    });
+    gummyCache.set(color, m);
+  }
+  return m;
+}
+
+function blob(rx: number, ry: number, rz: number, m: THREE.Material, y = 0, z = 0) {
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), m);
+  mesh.scale.set(rx, ry, rz);
+  mesh.position.set(0, y, z);
+  return mesh;
+}
+
 /** Head with a big-eyed cartoon face on the +Z side (characters face +Z at yaw 0). */
-function head(radius: number) {
+function head(radius: number, color: number) {
+  const r = radius * 1.12;
   const g = new THREE.Group();
-  g.add(new THREE.Mesh(new THREE.SphereGeometry(radius, 22, 16), SKIN));
+  g.add(blob(r, r * 1.04, r, gummy(color)));
   for (const side of [-1, 1]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(radius * 0.2, 12, 10), EYE);
-    eye.position.set(side * radius * 0.36, radius * 0.18, radius * 0.86);
-    eye.scale.set(0.85, 1.15, 0.6);
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(r * 0.17, 12, 10), EYE);
+    eye.position.set(side * r * 0.34, r * 0.16, r * 0.88);
+    eye.scale.set(0.85, 1.2, 0.6);
     g.add(eye);
-    const shine = new THREE.Mesh(new THREE.SphereGeometry(radius * 0.06, 8, 6), EYE_SHINE);
-    shine.position.set(side * radius * 0.36 + radius * 0.05, radius * 0.26, radius * 0.97);
+    const shine = new THREE.Mesh(new THREE.SphereGeometry(r * 0.05, 8, 6), EYE_SHINE);
+    shine.position.set(side * r * 0.34 + r * 0.04, r * 0.24, r * 0.98);
     g.add(shine);
   }
-  // Little smile.
-  const mouth = new THREE.Mesh(new THREE.TorusGeometry(radius * 0.22, radius * 0.035, 6, 12, Math.PI), EYE);
-  mouth.position.set(0, -radius * 0.28, radius * 0.9);
+  const mouth = new THREE.Mesh(new THREE.TorusGeometry(r * 0.18, r * 0.03, 6, 12, Math.PI), EYE);
+  mouth.position.set(0, -r * 0.26, r * 0.92);
   mouth.rotation.z = Math.PI;
   g.add(mouth);
   return g;
 }
 
-export function buildModel(kind: ModelKind, size: number): THREE.Object3D {
+function capsule(r: number, len: number, m: THREE.Material) {
+  return new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 8, 16), m);
+}
+
+/** Display model for one entity: guns from the weapon kind, gummy body parts from the collision shape. */
+export function buildModel(e: EntityDesc): THREE.Object3D {
+  const s = e.shape;
   let g: THREE.Object3D;
-  switch (kind) {
+  switch (e.model!) {
     case 'pistol': g = pistol(); break;
     case 'shotgun': g = shotgun(); break;
     case 'grenade': g = grenade(false); break;
     case 'grenadeLive': g = grenade(true); break;
-    case 'head': g = head(size); break;
+    case 'head': g = head(s.kind === 'ball' ? s.r : 0.14, e.color); break;
+    case 'torso': {
+      // A round bean instead of a box, overlapping the hips so the body reads as one blob.
+      const b = s.kind === 'box' ? s : { hx: 0.2, hy: 0.17, hz: 0.12 };
+      g = blob(b.hx * 1.18, b.hy * 1.5, b.hz * 1.55, gummy(e.color), -0.02);
+      break;
+    }
+    case 'hips': {
+      const b = s.kind === 'box' ? s : { hx: 0.17, hy: 0.1, hz: 0.11 };
+      g = blob(b.hx * 1.2, b.hy * 1.8, b.hz * 1.55, gummy(e.color));
+      break;
+    }
+    case 'limb': {
+      const c = s.kind === 'capsule' ? s : { hh: 0.1, r: 0.06 };
+      g = capsule(c.r * 1.3, c.hh * 2, gummy(e.color));
+      break;
+    }
+    case 'forearm': {
+      // Forearm with a mitten hand on the end.
+      const c = s.kind === 'capsule' ? s : { hh: 0.1, r: 0.055 };
+      const grp = new THREE.Group();
+      grp.add(capsule(c.r * 1.25, c.hh * 2, gummy(e.color)));
+      grp.add(blob(c.r * 1.7, c.r * 1.9, c.r * 1.6, gummy(e.color), -(c.hh + c.r * 0.9)));
+      g = grp;
+      break;
+    }
+    case 'shin': {
+      // Shin with a little rounded foot pointing forward.
+      const c = s.kind === 'capsule' ? s : { hh: 0.19, r: 0.07 };
+      const grp = new THREE.Group();
+      grp.add(capsule(c.r * 1.3, c.hh * 2, gummy(e.color)));
+      grp.add(blob(c.r * 1.35, c.r * 0.95, c.r * 1.9, gummy(e.color), -(c.hh + c.r * 0.35), c.r * 0.7));
+      g = grp;
+      break;
+    }
   }
   g.traverse((o) => {
     if ((o as THREE.Mesh).isMesh) { o.castShadow = true; o.receiveShadow = true; }

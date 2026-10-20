@@ -44,6 +44,17 @@ Work one phase at a time. A phase is done only when its "done when" is true. Com
 - Gore: pulsing cartoon blood fountains pinned to the wound, streaky droplets, splat decals. Panel → Gore: blood / ketchup & mustard / off, amount, "Mop the floor".
 - The bot fetches the nearest gun when unarmed.
 
+## Hands & controls (done)
+Gang Beasts PC uses one input per hand (tap = punch, hold = grab). We use:
+- WASD move, Space jump, Q / E = left / right hand: tap to punch, hold to grab (crates, players, ledges) or to hold an item.
+- An item stays only while its hand key is held; let go and it drops (tossed along with the hand's motion — swing and release to throw).
+- Reach toward a gun (floating or on the floor) while holding a hand key to pick it up into that hand.
+- Left mouse uses the active hand's item; R switches active hand when both hold something.
+- Grenades are single use: one per pickup, thrown with left mouse.
+- Being knocked silly (stiffness < 0.35) or a big hit makes both hands let go.
+- Every binding is remappable (Esc → Controls & settings), saved per browser, plus mouse sensitivity / invert.
+- Characters render as glossy gummy blobs (mitten hands, feet, faces). Physics bodies are unchanged.
+
 ## Known feel issues / tuning backlog
 - Grab reach takes ~0.8 s; consider stronger arm gains while grabbing.
 - One-handed lifting of a 20 kg crate doesn't work; two hands + stronger arms, or lighter props.

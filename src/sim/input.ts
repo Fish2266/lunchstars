@@ -8,13 +8,15 @@ export interface PlayerInput {
   aimYaw: number;
   aimPitch: number;
   jump: boolean;
-  grab: boolean;
-  /** Fire held weapon (or punch when unarmed). The sim edge-detects presses. */
+  /** Hand keys (Q / E by default). Tap = punch with that hand, hold = grab / keep holding an item. */
+  handL: boolean;
+  handR: boolean;
+  /** Use the active item (left mouse). Edge-detected. */
   fire: boolean;
-  /** Throw the held weapon. Edge-detected. */
-  drop: boolean;
+  /** Switch active item between hands (R). Edge-detected. */
+  cycle: boolean;
 }
 
 export function emptyInput(): PlayerInput {
-  return { moveX: 0, moveZ: 0, aimYaw: 0, aimPitch: 0, jump: false, grab: false, fire: false, drop: false };
+  return { moveX: 0, moveZ: 0, aimYaw: 0, aimPitch: 0, jump: false, handL: false, handR: false, fire: false, cycle: false };
 }

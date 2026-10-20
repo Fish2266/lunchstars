@@ -58,7 +58,7 @@ export class Effects {
         this.shake = Math.max(this.shake, 0.7);
         break;
       case 'pickup':
-        this.puff({ x: e.pos.x, y: e.pos.y + 0.55, z: e.pos.z }, 0.5, 0xfff7a8, 0.25);
+        this.puff({ x: e.pos.x, y: e.pos.y + 1.0, z: e.pos.z }, 0.5, 0xfff7a8, 0.25);
         break;
     }
   }

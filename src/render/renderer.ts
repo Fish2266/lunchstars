@@ -63,8 +63,7 @@ export class Renderer {
     for (const m of this.meshes) this.scene.remove(m);
     this.meshes = entities.map((e) => {
       if (e.model) {
-        const size = e.shape.kind === 'ball' ? e.shape.r : 0.1;
-        const model = buildModel(e.model, size);
+        const model = buildModel(e);
         this.scene.add(model);
         return model;
       }

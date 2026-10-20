@@ -68,6 +68,14 @@ interface Part {
 
 type V3 = { x: number; y: number; z: number };
 
+/**
+ * idle  — loose, swinging with the walk
+ * reach — held out along the aim, grabbing whatever the hand touches
+ * aim   — holding an item, pointed down the aim line
+ * punch — snapped straight out along the aim
+ */
+export type ArmMode = 'idle' | 'reach' | 'aim' | 'punch';
+
 interface Leg {
   /** +1 = left (local +X), -1 = right. */
   side: 1 | -1;
@@ -122,8 +130,8 @@ export class Ragdoll {
   private walkAmount = 0;
   private jumpCooldown = 0;
   yaw = 0;
-  /** Set by the sim each tick: how many arms point along the aim (0 = none, 1 = right, 2 = both). */
-  aimHands: 0 | 1 | 2 = 0;
+  /** Set by the sim each tick: what each arm is doing. Index 0 = left hand (Q), 1 = right hand (E). */
+  armMode: [ArmMode, ArmMode] = ['idle', 'idle'];
   private dt = 1 / 60;
   readonly legs: Leg[];
   private lastStep: Leg | null = null;
@@ -243,7 +251,12 @@ export class Ragdoll {
     return this.hands.map((h) => localToWorld(h.forearm.body, HAND_LOCAL));
   }
 
-  /** World position of the right hand (where guns are held). */
+  /** World position of one hand (0 = left, 1 = right). */
+  handPosition(i: 0 | 1) {
+    return localToWorld(this.hands[i].forearm.body, HAND_LOCAL);
+  }
+
+  /** World position of the right hand. */
   rightHand() {
     return localToWorld(this.parts.get('forearmR')!.body, HAND_LOCAL);
   }
@@ -487,53 +500,39 @@ export class Ragdoll {
     const twist = t.hipTwist * stride;
     this.drive('pelvis', mul(_qYaw, mul(rot(Y_AXIS, twist), mul(rot(X_AXIS, lean * 0.5), rot(Z_AXIS, roll * 0.6)))), k);
     // Bend at the waist when reaching down, so low things are grabbable.
-    const bend = input.grab ? clamp(-input.aimPitch, 0, 1.1) * 0.8 : 0;
+    const reaching = this.armMode[0] === 'reach' || this.armMode[1] === 'reach';
+    const bend = reaching ? clamp(-input.aimPitch, 0, 1.1) * 0.8 : 0;
     this.drive('chest', mul(_qYaw, mul(rot(Y_AXIS, -twist * 0.5), mul(rot(X_AXIS, lean + bend), rot(Z_AXIS, roll)))), k * t.torsoGain);
     // Neck: hold the head's weight on the chest so it doesn't loll, then point it.
     this.holdUp('head', k, this.chest);
     this.drive('head', mul(_qYaw, rot(X_AXIS, lean * -0.4)), k * t.headGain);
 
     for (const leg of this.legs) this.driveLeg(leg, canStep, k);
-    const armStride = t.armSwing * stride;
 
     const aimQ = mul(_qYaw, rot(X_AXIS, -(Math.PI / 2 + clamp(input.aimPitch, -1.2, 1.4))));
-    if (this.aimHands > 0 && !input.grab) {
-      // Point the gun arm(s) straight down the aim line; the free arm swings as usual.
-      const ka = k * t.aimGain;
-      this.drive('upperArmR', mul(aimQ, rot(Z_AXIS, this.aimHands === 2 ? 0.25 : 0)), ka);
-      this.drive('forearmR', aimQ, ka);
-      this.holdUp('upperArmR', k, this.chest);
-      this.holdUp('forearmR', k, this.chest);
-      if (this.aimHands === 2) {
-        this.drive('upperArmL', mul(aimQ, rot(Z_AXIS, -0.45)), ka);
-        this.drive('forearmL', mul(aimQ, rot(Y_AXIS, -0.5)), ka);
-        this.holdUp('upperArmL', k, this.chest);
-        this.holdUp('forearmL', k, this.chest);
-      } else {
-        const arm = armStride;
-        this.drive('upperArmL', mul(_qYaw, mul(rot(X_AXIS, arm), rot(Z_AXIS, 0.15))), k * t.idleArmGain);
-        this.drive('forearmL', mul(_qYaw, rot(X_AXIS, arm - 0.35)), k * t.idleArmGain);
+    // Each arm on its own: left = side +1 (local +X), right = side -1.
+    const arms = [['upperArmL', 'forearmL', 1], ['upperArmR', 'forearmR', -1]] as const;
+    for (let i = 0; i < 2; i++) {
+      const [upper, fore, side] = arms[i];
+      const mode = this.armMode[i];
+      if (mode === 'idle') {
+        // Loose: swing opposite the legs, mostly flopping around with the body.
+        const arm = t.armSwing * stride * side;
+        const ka = k * t.idleArmGain;
+        this.drive(upper, mul(_qYaw, mul(rot(X_AXIS, arm), rot(Z_AXIS, 0.2 * side))), ka);
+        this.drive(fore, mul(_qYaw, rot(X_AXIS, arm - 0.45)), ka);
+        continue;
       }
-    } else if (input.grab) {
-      // Reach forward along the aim pitch.
-      const armQ = aimQ;
-      const ka = k * t.aimGain;
-      this.drive('upperArmL', mul(armQ, rot(Z_AXIS, -0.08)), ka);
-      this.drive('upperArmR', mul(armQ, rot(Z_AXIS, 0.08)), ka);
-      this.drive('forearmL', armQ, ka);
-      this.drive('forearmR', armQ, ka);
-      for (const n of ['upperArmL', 'upperArmR', 'forearmL', 'forearmR'] as const) this.holdUp(n, k, this.chest);
-    } else {
-      // Arms are loose: they swing opposite the legs but mostly flop around with the body.
-      const arm = armStride;
-      const ka = k * t.idleArmGain;
-      this.drive('upperArmL', mul(_qYaw, mul(rot(X_AXIS, arm), rot(Z_AXIS, 0.2))), ka);
-      this.drive('upperArmR', mul(_qYaw, mul(rot(X_AXIS, -arm), rot(Z_AXIS, -0.2))), ka);
-      this.drive('forearmL', mul(_qYaw, rot(X_AXIS, arm - 0.45)), ka);
-      this.drive('forearmR', mul(_qYaw, rot(X_AXIS, -arm - 0.45)), ka);
+      // Out along the aim. Angle the arm in a little so the hand ends up in front of the chest.
+      const ka = k * t.aimGain * (mode === 'punch' ? 2 : 1);
+      const inward = mode === 'aim' ? 0.12 : 0.06;
+      this.drive(upper, mul(aimQ, rot(Z_AXIS, -inward * side)), ka);
+      this.drive(fore, aimQ, ka);
+      this.holdUp(upper, k, this.chest);
+      this.holdUp(fore, k, this.chest);
     }
 
-    this.updateGrab(input.grab && k > 0.3);
+    this.updateGrab([this.armMode[0] === 'reach' && k > 0.3, this.armMode[1] === 'reach' && k > 0.3]);
   }
 
   private driveLeg(leg: Leg, stepping: boolean, k: number) {
@@ -636,12 +635,13 @@ export class Ragdoll {
     p.body.applyTorqueImpulse({ x: _v.x * dt, y: _v.y * dt, z: _v.z * dt }, true);
   }
 
-  private updateGrab(holding: boolean) {
-    if (!holding) {
-      this.releaseAll();
-      return;
-    }
-    for (const h of this.hands) {
+  private updateGrab(holding: [boolean, boolean]) {
+    for (let i = 0; i < 2; i++) {
+      const h = this.hands[i];
+      if (!holding[i]) {
+        if (h.joint) { this.world.removeImpulseJoint(h.joint, true); h.joint = null; }
+        continue;
+      }
       if (h.joint) continue;
       const fb = h.forearm.body;
       const handWorld = localToWorld(fb, HAND_LOCAL);
@@ -650,7 +650,7 @@ export class Ragdoll {
         handWorld, { x: 0, y: 0, z: 0, w: 1 }, new this.R.Ball(tuning.grabRadius),
         (c) => { target = c; return false; },
         undefined, undefined, undefined, undefined,
-        (c) => !this.ownsCollider(c) && !c.isSensor() && c.parent() !== null,
+        (c) => !this.ownsCollider(c) && !c.isSensor() && c.parent() !== null && !this.ignoreGrab(c),
       );
       if (!target) continue;
       const other = (target as RAPIER_NS.Collider).parent()!;
@@ -660,6 +660,10 @@ export class Ragdoll {
       );
     }
   }
+
+  /** Set by the sim: colliders a reaching hand should not latch onto (loose guns are picked up instead). */
+  ignoreGrab: (c: RAPIER_NS.Collider) => boolean = () => false;
+
 }
 
 function shapeToCollider(R: R, s: ShapeDesc): RAPIER_NS.ColliderDesc {

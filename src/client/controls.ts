@@ -1,40 +1,43 @@
-// Keyboard + mouse -> PlayerInput, plus the orbit camera angles.
+// Keyboard + mouse -> PlayerInput, via remappable bindings, plus the orbit camera angles.
 import type { PlayerInput } from '../sim/input';
+import { settings, type Action } from './bindings';
 
 export class Controls {
   yaw = Math.PI; // camera yaw; character faces the same way
   pitch = -0.25;
-  sensitivity = 0.0025;
-  private keys = new Set<string>();
-  private mouseButtons = new Set<number>();
-  /** One-shot actions the client handles itself (debug tools). */
-  readonly pressed = new Set<string>();
-  /** Catches clicks shorter than a frame. */
-  private clickLatch = false;
+  baseSensitivity = 0.0025;
+  /** Codes currently held (keys and "MouseN"). */
+  private down = new Set<string>();
+  /** Codes pressed since the last frame — so taps shorter than a frame still count. */
+  private tapped = new Set<string>();
+  /** While true (settings open, rebinding), the game ignores input. */
+  suspended = false;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     addEventListener('keydown', (e) => {
-      if (!this.keys.has(e.code)) this.pressed.add(e.code);
-      this.keys.add(e.code);
-      if (e.code === 'Space') e.preventDefault();
+      if (this.suspended) return;
+      if (!this.down.has(e.code)) this.tapped.add(e.code);
+      this.down.add(e.code);
+      if (e.code === 'Space' || e.code === 'Tab' || e.code === 'Backspace') e.preventDefault();
     });
-    addEventListener('keyup', (e) => this.keys.delete(e.code));
-    addEventListener('blur', () => { this.keys.clear(); this.mouseButtons.clear(); });
+    addEventListener('keyup', (e) => this.down.delete(e.code));
+    addEventListener('blur', () => this.down.clear());
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     canvas.addEventListener('mousedown', (e) => {
-      if (!this.locked) {
-        // Can be refused (e.g. inside an embedded preview); the game still works without it.
-        Promise.resolve(canvas.requestPointerLock()).catch(() => {});
-        return;
-      }
-      this.mouseButtons.add(e.button);
-      if (e.button === 0) this.clickLatch = true;
+      if (this.suspended) return;
+      // Can be refused (e.g. inside an embedded preview); the game still works without it.
+      if (!this.locked) Promise.resolve(canvas.requestPointerLock()).catch(() => {});
+      const code = `Mouse${e.button}`;
+      this.down.add(code);
+      this.tapped.add(code);
+      e.preventDefault();
     });
-    addEventListener('mouseup', (e) => this.mouseButtons.delete(e.button));
+    addEventListener('mouseup', (e) => this.down.delete(`Mouse${e.button}`));
     addEventListener('mousemove', (e) => {
-      if (!this.locked) return;
-      this.yaw -= e.movementX * this.sensitivity;
-      this.pitch = Math.max(-1.2, Math.min(1.0, this.pitch - e.movementY * this.sensitivity));
+      if (!this.locked || this.suspended) return;
+      const s = this.baseSensitivity * settings.sensitivity;
+      this.yaw -= e.movementX * s;
+      this.pitch = Math.max(-1.2, Math.min(1.0, this.pitch - e.movementY * s * (settings.invertY ? -1 : 1)));
     });
   }
 
@@ -42,10 +45,30 @@ export class Controls {
     return document.pointerLockElement === this.canvas;
   }
 
+  /** Held now, or tapped since last frame. */
+  isDown(action: Action) {
+    if (this.suspended) return false;
+    for (const code of settings.bindings[action]) {
+      if (code && (this.down.has(code) || this.tapped.has(code))) return true;
+    }
+    return false;
+  }
+
+  /** True once per press. */
+  consume(action: Action) {
+    for (const code of settings.bindings[action]) {
+      if (code && this.tapped.has(code)) {
+        this.tapped.delete(code);
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** Build this tick's input. Movement is camera-relative, converted to world space here. */
   read(): PlayerInput {
-    const f = (this.keys.has('KeyW') || this.keys.has('ArrowUp') ? 1 : 0) - (this.keys.has('KeyS') || this.keys.has('ArrowDown') ? 1 : 0);
-    const r = (this.keys.has('KeyD') || this.keys.has('ArrowRight') ? 1 : 0) - (this.keys.has('KeyA') || this.keys.has('ArrowLeft') ? 1 : 0);
+    const f = (this.isDown('forward') ? 1 : 0) - (this.isDown('back') ? 1 : 0);
+    const r = (this.isDown('right') ? 1 : 0) - (this.isDown('left') ? 1 : 0);
     // Facing yaw: forward = (sin yaw, cos yaw); right = (-cos yaw, sin yaw).
     const sx = Math.sin(this.yaw), cz = Math.cos(this.yaw);
     let mx = f * sx - r * cz;
@@ -57,21 +80,20 @@ export class Controls {
       moveZ: mz,
       aimYaw: this.yaw,
       aimPitch: this.pitch,
-      jump: this.keys.has('Space'),
-      grab: this.keys.has('KeyE') || this.mouseButtons.has(2),
-      fire: this.clickLatch || this.mouseButtons.has(0) || this.keys.has('KeyQ'),
-      drop: this.keys.has('KeyX') || this.mouseButtons.has(1),
+      jump: this.isDown('jump'),
+      handL: this.isDown('handL'),
+      handR: this.isDown('handR'),
+      fire: this.isDown('fire'),
+      cycle: this.isDown('cycle'),
     };
   }
 
-  consume(code: string) {
-    const had = this.pressed.has(code);
-    this.pressed.delete(code);
-    return had;
+  endFrame() {
+    this.tapped.clear();
   }
 
-  endFrame() {
-    this.pressed.clear();
-    this.clickLatch = false;
+  releaseAll() {
+    this.down.clear();
+    this.tapped.clear();
   }
 }
