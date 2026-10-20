@@ -99,6 +99,7 @@ async function main() {
   const gore = new Gore(renderer.scene, groundAt);
   const pitFire = new PitFire(renderer.scene, INCINERATOR.pitCenter, INCINERATOR.pitHalf, -1.42);
   const matchHud = new MatchHud(localId);
+  matchHud.canRematch = mode !== 'client';
   const hud = new Hud(localId, (id) => matchHud.nameOf(id));
   const crosshair = document.getElementById('crosshair')!;
   let hitMarkerTimer = 0;
@@ -233,11 +234,12 @@ async function main() {
     const dt = realDt * (mode === 'solo' && matchHud.slowmo > 0 ? 0.3 : 1);
     inputs.set(localId, myInput);
     for (const [id, b] of bots) inputs.set(id, b.think(dt));
-    if (host) for (const [id, inp] of host.remoteInputs()) inputs.set(id, inp);
     // Solo: nothing runs behind the menu. Online: the game goes on.
     if (mode === 'solo' && menu.open) acc = 0; else acc += dt;
     let stepped = false;
     while (acc >= DT) {
+      // Per step: a remote tap that arrived since the last step is held for exactly this one.
+      if (host) for (const [id, inp] of host.remoteInputs()) inputs.set(id, inp);
       sim.step(inputs);
       acc -= DT;
       stepped = true;
@@ -251,10 +253,13 @@ async function main() {
       host.broadcast(transforms);
     }
   }
-  // Browsers stop animation frames in background tabs; a host must keep the game running for everyone else.
-  setInterval(() => {
-    if (mode === 'host' && document.hidden) { simulate(performance.now(), 1); frameEvents = frameEvents.slice(-200); }
-  }, 50);
+  // Browsers stop animation frames in background tabs and throttle their timers to once a second, but a host
+  // must keep the game running for everyone else. Timers inside a worker aren't throttled like that, so a tiny
+  // worker ticks the host while its tab is hidden.
+  const ticker = new Worker(URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 16)'], { type: 'text/javascript' })));
+  ticker.onmessage = () => {
+    if (mode === 'host' && document.hidden) { simulate(performance.now(), 0.25); frameEvents = frameEvents.slice(-200); }
+  };
 
   // ---------------------------------------------------------------- frame loop
   let last = performance.now();

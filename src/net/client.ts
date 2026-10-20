@@ -1,34 +1,38 @@
 // The client: sends inputs, receives the roster / view / events, and buffers snapshots to draw the world
 // slightly in the past, interpolating between them so motion is smooth despite 20 Hz updates.
+// Events and the GameView are held back to the same point in time, so effects and HUD match the bodies.
 import type Peer from 'peerjs';
 import type { DataConnection } from 'peerjs';
-import type { PlayerInput } from '../sim/input';
+import { emptyInput, type PlayerInput } from '../sim/input';
 import type { GameView, SimEvent } from '../sim/sim';
 import { openPeer } from './host';
 import {
-  binaryType, decodeSnapshot, encodeInput, PEER_PREFIX, PROTOCOL_VERSION,
+  binaryType, BUTTONS, decodeSnapshot, encodeInput, FAST_LABEL, PEER_PREFIX, PROTOCOL_VERSION,
   type ReliableMsg, type RosterEntry, type Snapshot,
 } from './protocol';
 
-/** How far behind the newest known host tick we draw (ticks at 60 Hz): 100 ms = two snapshots. */
+/** How far behind the newest snapshot we draw (ticks at 60 Hz): 100 ms = two snapshots. */
 const INTERP_DELAY = 6;
-/** Hold quick taps (punch, shoot, jump, switch) for this many sends so a dropped packet can't eat them. */
-const TAP_HOLD = 4;
 /** No snapshot for this long: the host is gone. */
 const HOST_TIMEOUT_MS = 8000;
+const CONNECT_TIMEOUT_MS = 12000;
 
 export class NetClient {
   you = -1;
   roster: RosterEntry[] = [];
-  view: GameView | null = null;
   /** Snapshots ordered by tick. */
   private snaps: Snapshot[] = [];
-  private events: SimEvent[] = [];
+  /** Views and event batches from the host, released once playback reaches their tick. */
+  private views: GameView[] = [];
+  private shownView: GameView | null = null;
+  private eventQueue: { tick: number; events: SimEvent[] }[] = [];
   private peer: Peer | null = null;
   private rel: DataConnection | null = null;
   private fast: DataConnection | null = null;
   private seq = 0;
-  private held: Record<string, number> = {};
+  /** Presses per button so far (sent with every input; the host turns increments into taps). */
+  private presses = BUTTONS.map(() => 0);
+  private prevButtons = BUTTONS.map(() => false);
   /** The tick being drawn. Advances at the host's measured tick rate, nudged to keep INTERP_DELAY of buffer. */
   private renderTick: number | null = null;
   private lastInterp = 0;
@@ -43,41 +47,52 @@ export class NetClient {
   onClosed: (reason: string) => void = () => {};
   closed = false;
 
-  /** Connect to a room; resolves after the host welcomes us. */
+  /** Connect to a room; resolves once both channels are open. */
   async connect(code: string, name: string): Promise<void> {
-    this.peer = await openPeer();
-    const hostId = PEER_PREFIX + code.toUpperCase();
-    const rel = this.peer.connect(hostId, { label: 'rel', serialization: 'json', reliable: true });
-    this.rel = rel;
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('No room with that code (or the host is unreachable).')), 10000);
-      this.peer!.on('error', (e) => { clearTimeout(timer); reject(e); });
-      rel.on('open', () => rel.send({ t: 'hello', v: PROTOCOL_VERSION, name } satisfies ReliableMsg));
-      rel.on('data', (d) => {
-        const msg = d as ReliableMsg;
-        if (msg.t === 'welcome') { clearTimeout(timer); this.you = msg.you; this.setRoster(msg.roster); resolve(); }
-        else if (msg.t === 'reject') { clearTimeout(timer); reject(new Error(msg.reason)); }
-        else this.onReliable(msg);
-      });
-      rel.on('close', () => this.close('The host left the game.'));
-    });
-    // Second, unreliable channel for snapshots and inputs.
-    this.fast = this.peer.connect(hostId, { label: 'fast', serialization: 'raw', reliable: false, metadata: { id: this.you } });
-    this.fast.on('data', (d) => this.onBinary(d as ArrayBuffer));
+    try {
+      this.peer = await openPeer();
+      await this.handshake(PEER_PREFIX + code.toUpperCase(), name);
+    } catch (e) {
+      this.closed = true;
+      this.peer?.destroy();
+      throw e;
+    }
     // Keep-alive both ways: background tabs get no animation frames (so no per-frame input), and a host
     // whose tab was closed may never fire 'close'.
     this.heard = performance.now();
     this.keepAlive = setInterval(() => {
       const now = performance.now();
-      if (now - this.lastSent > 250 && this.lastInput) this.sendInput(this.lastInput);
+      if (now - this.lastSent > 250) this.sendInput(this.lastInput ?? emptyInput());
       if (now - this.heard > HOST_TIMEOUT_MS) this.close('Lost connection to the host.');
     }, 250);
   }
 
+  private async handshake(hostId: string, name: string) {
+    const peer = this.peer!;
+    const rel = peer.connect(hostId, { label: 'rel', serialization: 'json', reliable: true });
+    this.rel = rel;
+    await withTimeout(new Promise<void>((resolve, reject) => {
+      peer.on('error', (e) => reject(e.type === 'peer-unavailable' ? new Error('No room with that code.') : e));
+      rel.on('open', () => rel.send({ t: 'hello', v: PROTOCOL_VERSION, name } satisfies ReliableMsg));
+      rel.on('data', (d) => {
+        const msg = d as ReliableMsg;
+        if (msg.t === 'welcome') { this.you = msg.you; this.setRoster(msg.roster); resolve(); }
+        else if (msg.t === 'reject') reject(new Error(msg.reason));
+        else this.onReliable(msg);
+      });
+      rel.on('close', () => { reject(new Error('The host closed the connection.')); this.close('The host left the game.'); });
+    }), 'No answer from that room (or the host is unreachable).');
+    // Second, unreliable channel for snapshots and inputs.
+    const fast = peer.connect(hostId, { label: FAST_LABEL, serialization: 'raw', reliable: false, metadata: { id: this.you } });
+    this.fast = fast;
+    fast.on('data', (d) => this.onBinary(d as ArrayBuffer));
+    await withTimeout(new Promise<void>((resolve) => fast.on('open', () => resolve())), "Connected, but the game data channel didn't open.");
+  }
+
   private onReliable(msg: ReliableMsg) {
     if (msg.t === 'roster') this.setRoster(msg.roster);
-    else if (msg.t === 'view') this.view = msg.view;
-    else if (msg.t === 'events') this.events.push(...msg.events);
+    else if (msg.t === 'view') { this.views.push(msg.view); if (this.views.length > 20) this.views.shift(); }
+    else if (msg.t === 'events') this.eventQueue.push({ tick: msg.tick, events: msg.events });
   }
 
   private setRoster(roster: RosterEntry[]) {
@@ -89,13 +104,13 @@ export class NetClient {
     if (binaryType(buf) !== 'snapshot') return;
     const s = decodeSnapshot(buf);
     if (!s) return;
-    this.heard = performance.now();
+    const now = performance.now();
+    this.heard = now;
     const last = this.snaps[this.snaps.length - 1];
-    if (last && s.tick <= last.tick) return; // out of order / duplicate
+    if (last && s.tick <= last.tick) return; // out of order / duplicate (the channel is unordered)
     this.snaps.push(s);
     if (this.snaps.length > 30) this.snaps.shift();
     // Measure how fast the host's clock actually runs (smoothed: packets arrive with jitter).
-    const now = performance.now();
     if (this.lastArrival && now > this.lastArrival.time + 1) {
       const inst = (s.tick - this.lastArrival.tick) / (now - this.lastArrival.time);
       this.rate = Math.max(0.005, Math.min(0.12, this.rate + (inst - this.rate) * 0.1));
@@ -103,29 +118,36 @@ export class NetClient {
     this.lastArrival = { tick: s.tick, time: now };
   }
 
-  /** Events received since the last call. */
-  drainEvents(): SimEvent[] {
-    const e = this.events;
-    this.events = [];
-    return e;
+  /** The newest GameView at or before the tick being drawn. */
+  get view(): GameView | null {
+    const at = this.renderTick ?? Infinity;
+    while (this.views.length && this.views[0].tick <= at) this.shownView = this.views.shift()!;
+    return this.shownView ?? null;
   }
 
-  /** Send this frame's input. Quick taps are held a few sends so a lost packet can't swallow them. */
+  /** Events whose time has come (playback reached the tick they happened by). */
+  drainEvents(): SimEvent[] {
+    const at = this.renderTick ?? Infinity;
+    const out: SimEvent[] = [];
+    while (this.eventQueue.length && this.eventQueue[0].tick <= at) out.push(...this.eventQueue.shift()!.events);
+    return out;
+  }
+
+  /** Send this frame's input, with the running press count for each button. */
   sendInput(input: PlayerInput) {
     if (!this.fast?.open) return;
-    this.lastInput = { ...input, fire: false, jump: false, cycle: false };
+    BUTTONS.forEach((k, i) => {
+      if (input[k] && !this.prevButtons[i]) this.presses[i]++;
+      this.prevButtons[i] = input[k];
+    });
+    this.lastInput = input;
     this.lastSent = performance.now();
-    const out = { ...input };
-    for (const k of ['fire', 'handL', 'handR', 'jump', 'cycle'] as const) {
-      if (input[k]) this.held[k] = TAP_HOLD;
-      else if ((this.held[k] ?? 0) > 0) { this.held[k]--; out[k] = true; }
-    }
-    this.fast.send(encodeInput(++this.seq, out));
+    this.fast.send(encodeInput(++this.seq, input, this.presses));
   }
 
   /**
    * Write interpolated transforms for the dynamic entities into `out` (7 floats per entity, full array).
-   * Returns false until enough snapshots have arrived.
+   * Returns false until a snapshot matching the current entity list has arrived.
    */
   interpolate(out: Float32Array, dynamic: readonly number[]): boolean {
     if (this.snaps.length === 0) return false;
@@ -183,6 +205,13 @@ export class NetClient {
     this.peer?.destroy();
     this.onClosed(reason);
   }
+}
+
+function withTimeout<T>(p: Promise<T>, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), CONNECT_TIMEOUT_MS);
+    p.then((v) => { clearTimeout(timer); resolve(v); }, (e) => { clearTimeout(timer); reject(e); });
+  });
 }
 
 /** Spherical blend of the quaternions at A[d+3..] and B[d+3..] into out[o..o+3]. */

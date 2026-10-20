@@ -41,6 +41,8 @@ export class MatchHud {
   private lastCountdown = -1;
   /** Seconds of slow motion still to play (read by the main loop). */
   slowmo = 0;
+  /** Only whoever runs the sim (solo, or the host) can start a rematch. */
+  canRematch = true;
 
   /** Latest state, for names/colours and the scoreboard. */
   private view: GameView | null = null;
@@ -105,10 +107,11 @@ export class MatchHud {
       }
       case 'roundOver':
         if (e.winner === null) this.show('DRAW', 'Nobody made it', 3.2);
-        else this.show(`${this.name(e.winner).toUpperCase()} WINS`, `Round ${e.round}`, 3.2, this.color(e.winner));
+        else this.show(`${this.name(e.winner).toUpperCase()} WINS`, `Round ${Number(e.round)}`, 3.2, this.color(e.winner));
         break;
       case 'matchOver':
-        this.show(`${this.name(e.winner).toUpperCase()} WINS THE MATCH`, `Press ${keyFor('jump')} for a rematch`, 999, this.color(e.winner));
+        this.show(`${this.name(e.winner).toUpperCase()} WINS THE MATCH`,
+          this.canRematch ? `Press ${keyFor('jump')} for a rematch` : 'A new match starts shortly', 999, this.color(e.winner));
         break;
     }
   }
@@ -121,7 +124,7 @@ export class MatchHud {
       const n = Math.ceil(m.timer);
       if (n !== this.lastCountdown && n > 0) {
         this.lastCountdown = n;
-        this.show(String(n), m.round === 1 ? `Round 1 · first to ${m.winsToWin}` : `Round ${m.round}`, 1.1);
+        this.show(String(n), m.round === 1 ? `Round 1 · first to ${Number(m.winsToWin)}` : `Round ${Number(m.round)}`, 1.1);
       }
     }
     this.bannerTimer -= dt;
@@ -137,10 +140,10 @@ export class MatchHud {
       const id = p.id;
       const wins = m.wins[id] ?? 0;
       let pips = '';
-      for (let i = 0; i < m.winsToWin; i++) pips += `<span class="pip${i < wins ? ' won' : ''}"></span>`;
+      for (let i = 0; i < Math.min(9, m.winsToWin); i++) pips += `<span class="pip${i < wins ? ' won' : ''}"></span>`;
       html += `<div class="p${m.alive.includes(id) || m.phase === 'countdown' ? '' : ' out'}"><span class="name" style="color:${this.color(id)}">${this.name(id)}</span>${pips}</div>`;
     }
-    html += `<div class="round">Round ${m.round}</div>`;
+    html += `<div class="round">Round ${Number(m.round)}</div>`;
     if (this.score.innerHTML !== html) this.score.innerHTML = html;
   }
 }

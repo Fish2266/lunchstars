@@ -4,34 +4,37 @@ import Peer, { type DataConnection } from 'peerjs';
 import { emptyInput, type PlayerInput } from '../sim/input';
 import type { Sim, SimEvent } from '../sim/sim';
 import {
-  binaryType, decodeInput, encodeSnapshot, makeRoomCode, MAX_PLAYERS, PEER_PREFIX, PROTOCOL_VERSION,
+  binaryType, BUTTONS, decodeInput, encodeSnapshot, FAST_LABEL, makeRoomCode, MAX_PLAYERS, PEER_PREFIX, PROTOCOL_VERSION,
   type ReliableMsg, type RosterEntry,
 } from './protocol';
 
 interface Remote {
   id: number;
-  name: string;
   rel: DataConnection;
   fast: DataConnection | null;
   input: PlayerInput;
   seq: number;
+  /** Last press count seen per button, and presses not yet shown to the sim. */
+  presses: number[];
+  pending: boolean[];
   /** performance.now() of the last packet from them (closing a tab doesn't reliably fire 'close'). */
   heard: number;
 }
-
-/** Silence after which a client is treated as gone (clients send input at least every 250 ms, even in a background tab). */
-const TIMEOUT_MS = 6000;
 
 const SNAPSHOT_EVERY = 3; // ticks (60 Hz / 3 = 20 Hz)
 const VIEW_EVERY = 6; // ticks (10 Hz)
 /** Everyone who has ever been in the room, counting players who left (each keeps a collision group). */
 const MAX_EVER = 12;
+/** Silence after which a client is treated as gone (clients send input at least every 250 ms, even in a background tab). */
+const TIMEOUT_MS = 6000;
 
 export class NetHost {
   code = '';
   readonly roster: RosterEntry[] = [];
   private peer: Peer | null = null;
   private remotes = new Map<number, Remote>();
+  /** Which player each reliable connection belongs to. */
+  private playerOf = new Map<DataConnection, number>();
   private nextId = 1;
   private lastSnapTick = -999;
   private lastViewTick = -999;
@@ -50,10 +53,12 @@ export class NetHost {
     for (let attempt = 0; attempt < 5; attempt++) {
       const code = makeRoomCode();
       try {
-        this.peer = await openPeer(PEER_PREFIX + code);
+        const peer = await openPeer(PEER_PREFIX + code);
+        this.peer = peer;
         this.code = code;
-        this.peer.on('connection', (c) => this.onConnection(c));
-        this.peer.on('disconnected', () => this.peer?.reconnect());
+        peer.on('connection', (c) => this.onConnection(c));
+        // Lost the broker (not the players): reconnect so new people can still join.
+        peer.on('disconnected', () => { if (!peer.destroyed) peer.reconnect(); });
         return code;
       } catch (e) {
         if ((e as { type?: string }).type !== 'unavailable-id') throw e;
@@ -91,9 +96,18 @@ export class NetHost {
     this.broadcastRoster();
   }
 
-  /** Latest input from each connected remote player. */
+  /**
+   * Each remote player's input for the next sim step. Call once per step: a press that arrived since the last
+   * step shows as held for this step even if the key was already let go, so no tap is lost between ticks.
+   */
   remoteInputs(): [number, PlayerInput][] {
-    return [...this.remotes.values()].map((r) => [r.id, r.input]);
+    const out: [number, PlayerInput][] = [];
+    for (const r of this.remotes.values()) {
+      const input = { ...r.input };
+      BUTTONS.forEach((k, i) => { if (r.pending[i]) { input[k] = true; r.pending[i] = false; } });
+      out.push([r.id, input]);
+    }
+    return out;
   }
 
   /** Queue this frame's events to send. */
@@ -107,7 +121,7 @@ export class NetHost {
     const now = performance.now();
     for (const r of [...this.remotes.values()]) if (now - r.heard > TIMEOUT_MS) this.dropConnection(r.rel);
     if (this.pendingEvents.length) {
-      this.sendAll({ t: 'events', events: this.pendingEvents });
+      this.sendAll({ t: 'events', tick, events: this.pendingEvents });
       this.pendingEvents = [];
     }
     if (tick - this.lastViewTick >= VIEW_EVERY) {
@@ -131,17 +145,20 @@ export class NetHost {
   // ---------------------------------------------------------------- connections
 
   private onConnection(conn: DataConnection) {
-    if (conn.label === 'fast') {
-      // The client's second (unreliable) channel, opened after it was welcomed.
-      const id = Number(conn.metadata?.id);
-      const r = this.remotes.get(id);
-      if (!r) { conn.close(); return; }
+    if (conn.label === FAST_LABEL) {
+      // The client's second (unreliable) channel, opened after it was welcomed. It must come from the same
+      // peer as that player's reliable channel, so nobody can drive someone else's character.
+      const r = this.remotes.get(Number(conn.metadata?.id));
+      if (!r || r.rel.peer !== conn.peer || r.fast) { conn.close(); return; }
       r.fast = conn;
       conn.on('data', (d) => {
         if (binaryType(d as ArrayBuffer) !== 'input') return;
         const m = decodeInput(d as ArrayBuffer);
+        if (!m) return;
         r.heard = performance.now();
-        if (m && m.seq > r.seq) { r.seq = m.seq; r.input = m.input; }
+        // Presses count up; any change means new presses, even if this packet arrived out of order.
+        m.presses.forEach((n, i) => { if (n !== r.presses[i]) { r.presses[i] = n; r.pending[i] = true; } });
+        if (m.seq > r.seq) { r.seq = m.seq; r.input = m.input; }
       });
       return;
     }
@@ -151,7 +168,7 @@ export class NetHost {
   }
 
   private onReliable(conn: DataConnection, msg: ReliableMsg) {
-    if (msg.t !== 'hello') return;
+    if (msg?.t !== 'hello' || this.playerOf.has(conn)) return; // clients only ever say hello, once
     if (msg.v !== PROTOCOL_VERSION) {
       conn.send({ t: 'reject', reason: 'Different game version — refresh both pages.' } satisfies ReliableMsg);
       return;
@@ -165,23 +182,27 @@ export class NetHost {
     // Order matters: every peer adds players in roster order so entity indices match.
     this.sim.addPlayer(id);
     this.roster.push({ id, name, bot: false, left: false });
-    this.remotes.set(id, { id, name, rel: conn, fast: null, input: emptyInput(), seq: 0, heard: performance.now() });
-    (conn as DataConnection & { _playerId?: number })._playerId = id;
+    this.playerOf.set(conn, id);
+    this.remotes.set(id, {
+      id, rel: conn, fast: null, input: emptyInput(), seq: 0,
+      presses: BUTTONS.map(() => 0), pending: BUTTONS.map(() => false), heard: performance.now(),
+    });
     conn.send({ t: 'welcome', v: PROTOCOL_VERSION, you: id, roster: this.roster } satisfies ReliableMsg);
     this.broadcastRoster(id);
     this.lastViewTick = -999; // send the newcomer a view right away
   }
 
   private dropConnection(conn: DataConnection) {
-    const id = (conn as DataConnection & { _playerId?: number })._playerId;
-    if (id === undefined || !this.remotes.has(id)) return;
-    const r = this.remotes.get(id)!;
-    this.remotes.delete(id);
+    const id = this.playerOf.get(conn);
+    this.playerOf.delete(conn);
+    const r = id === undefined ? undefined : this.remotes.get(id);
+    if (!r) return;
+    this.remotes.delete(r.id);
     r.rel.close();
     r.fast?.close();
-    const entry = this.roster.find((e) => e.id === id);
+    const entry = this.roster.find((e) => e.id === r.id);
     if (entry) entry.left = true;
-    this.sim.removePlayer(id);
+    this.sim.removePlayer(r.id);
     this.broadcastRoster();
   }
 
@@ -195,12 +216,29 @@ export class NetHost {
   }
 }
 
-/** Create a Peer with a fixed id; resolves once registered with the broker. */
+/** Create a Peer (with a fixed id for a host); resolves once registered with the broker. */
 export function openPeer(id?: string): Promise<Peer> {
+  makeFastChannelsUnreliable();
   return new Promise((resolve, reject) => {
     const peer = id ? new Peer(id) : new Peer();
     const fail = (e: unknown) => { peer.destroy(); reject(e); };
     peer.once('open', () => { peer.off('error', fail); resolve(peer); });
     peer.once('error', fail);
   });
+}
+
+/**
+ * PeerJS's `reliable: false` only turns off ordering: lost packets are still retransmitted forever, which for
+ * snapshots and inputs means resending stale data and competing with fresh data for bandwidth. PeerJS has no
+ * option for it, so the channel it creates for FAST_LABEL gets `maxRetransmits: 0` here. (The side that opens the
+ * channel — the client — decides its settings.)
+ */
+let patched = false;
+function makeFastChannelsUnreliable() {
+  if (patched || typeof RTCPeerConnection === 'undefined') return;
+  patched = true;
+  const create = RTCPeerConnection.prototype.createDataChannel;
+  RTCPeerConnection.prototype.createDataChannel = function (label: string, init?: RTCDataChannelInit) {
+    return create.call(this, label, label === FAST_LABEL ? { ...init, ordered: false, maxRetransmits: 0 } : init);
+  };
 }

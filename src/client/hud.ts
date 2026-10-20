@@ -4,6 +4,10 @@ import { PLAYER_COLORS, type GameView, type PlayerView } from '../sim/sim';
 import { weapons } from '../sim/weapons';
 import { keyFor } from './bindings';
 
+function esc(s: unknown) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+}
+
 export class Hud {
   private slots = [...document.querySelectorAll<HTMLElement>('#hud .slot')];
   private note = document.querySelector<HTMLElement>('#hud .stun')!;
@@ -38,9 +42,10 @@ export class Hud {
       const h = me.hands[i];
       const el = this.slots[i];
       const key = keyFor(i === 0 ? 'handL' : 'handR');
-      const gripName = h.grip ? ('player' in h.grip ? this.nameOf(h.grip.player) : h.grip.object) : null;
+      // Online, the view comes from another player's browser: escape anything that goes into HTML.
+      const gripName = h.grip ? esc('player' in h.grip ? this.nameOf(h.grip.player) : h.grip.object) : null;
       const html = h.item
-        ? `<span class="k">${key}</span><span class="name">${h.item}</span><div class="ammo">${h.item === 'grenade' ? 'throw with ' + keyFor('fire') : `${h.ammo} / ${weapons[h.item].ammo}`}</div>`
+        ? `<span class="k">${key}</span><span class="name">${esc(h.item)}</span><div class="ammo">${h.item === 'grenade' ? 'throw with ' + keyFor('fire') : `${Number(h.ammo)} / ${weapons[h.item]?.ammo ?? '?'}`}</div>`
         : gripName
           ? `<span class="k">${key}</span><span class="name">${gripName}</span><div class="ammo">holding · let go of ${key} to drop</div>`
           : `<span class="k">${key}</span><span class="name">empty</span>`;
@@ -57,7 +62,7 @@ export class Hud {
     for (const p of view.players) {
       const color = '#' + PLAYER_COLORS[p.slot % PLAYER_COLORS.length].toString(16).padStart(6, '0');
       const pct = Math.min(100, (p.ko / p.koThreshold) * 100);
-      const items = p.hands.map((h) => h.item ? `${h.item}(${h.ammo})` : '–').join(' / ');
+      const items = p.hands.map((h) => h.item ? `${esc(h.item)}(${Number(h.ammo)})` : '–').join(' / ');
       const ex = extra(p);
       html += `<div class="p"><b style="color:${color}">${p.id === this.localId ? 'You' : this.nameOf(p.id)}</b>`
         + (p.koTimer > 0 ? ` <span class="out">KO ${p.koTimer.toFixed(1)}s</span>` : '')
