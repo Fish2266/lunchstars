@@ -295,7 +295,8 @@ async function main() {
           + `<div class="bar"><i style="width:${pct}%"></i></div>`
           + `KO meter ${ft.ko.toFixed(0)}/${thr.toFixed(0)} · KOs ${ft.koCount} · hits ${ft.hitsTaken}<br>`
           + `stiffness ${r.stiffness.toFixed(2)} · stun ${r.stunTimer.toFixed(2)}s · stagger ${r.staggerTimer.toFixed(2)}s · ${r.grounded ? 'grounded' : 'airborne'}<br>`
-          + `hands ${items} · active ${ft.active === 0 ? 'L' : 'R'}</div>`;
+          + `hands ${items} · active ${ft.active === 0 ? 'L' : 'R'}`
+          + (id === DUMMY_ID ? `<br>bot: ${bot.state}` : '') + `</div>`;
       }
       if (debugHud.innerHTML !== html) debugHud.innerHTML = html;
     }

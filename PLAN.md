@@ -81,7 +81,9 @@ A factory floor around a central fire pit.
 - Look: tiled concrete floor, brick back wall, metal grating, brushed-metal walls, hazard-striped press heads (procedural textures at world scale); hanging factory lamps with warm spotlights. Nothing outside the walls but darkness.
 - Rounds: 3-2-1 countdown, last one standing, first to 3, rematch with Jump. KO escalation resets each round. Practice mode in the panel.
 - Carrying: anything you hold (a KO'd player, a crate) is partly lifted and pulled along with you.
-- Bot: grabs guns off the belts, avoids the pit and edges, and drags KO'd players onto the nearest belt (works reliably now that belts are flush).
+- Fire: noise-shader flame sheets over a churning lava/coal bed; flames swell on the flare warning and shoot up into a column on the burst.
+- Bot (rewritten): priority-based — escape danger (belt near the pit, rim, a press about to slam) → haul a KO'd opponent onto a belt → armed: stand on the far side of the opponent from the nearest hazard (pit / open edge) so shots push them into it, keep each gun at its range, lob grenades, shoot barrels next to them → unarmed: grab a safe belt gun, else brawl from the hazard side; backs off when its KO meter is high. Aim lags/wobbles; unsticks itself. Bot-vs-bot plays full matches (~80 s, mostly punch KO → hauled into the fire).
+- Scoop grab: a reaching hand with nothing in it feels straight down and grabs a loose body/object lying underneath (lets you pick up people off the floor).
 - Empty guns smoke on the ground until they vanish; blood puddles fade out (and fade away between rounds).
 
 ## Known feel issues / tuning backlog
@@ -90,4 +92,4 @@ A factory floor around a central fire pit.
 - Slight residual wobble (~5°) after recovering from a knockdown.
 - Aiming arms sway ±8° for ~0.7 s after a fast flick (cosmetic: shots use the crosshair aim, not the arm).
 - Weapon sliders aren't saved to localStorage yet (only `tuning` is).
-- Bot on the Incinerator: sometimes falls in chasing belt guns, and can go long stretches without finishing off an idle opponent.
+- Seen once in testing: a round that didn't end after an elimination (couldn't reproduce; may have been the test harness).

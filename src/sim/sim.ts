@@ -1264,6 +1264,11 @@ export class Sim {
     }
   }
 
+  /** Barrels that can still go off (for bots). */
+  liveBarrels(): V3[] {
+    return this.barrels.filter((b) => b.respawn === 0 && b.fuse === 0).map((b) => ({ ...b.body.translation() }));
+  }
+
   /** Where guns can be had right now (for bots). */
   availableWeapons(): { kind: WeaponKind; pos: V3 }[] {
     const out: { kind: WeaponKind; pos: V3 }[] = [];

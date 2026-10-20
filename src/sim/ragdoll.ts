@@ -752,9 +752,19 @@ export class Ragdoll {
         undefined, undefined, undefined, undefined,
         (c) => !this.ownsCollider(c) && !c.isSensor() && c.parent() !== null && !this.ignoreGrab(c),
       );
-      if (!target) continue;
+      let grabPoint = handWorld;
+      if (!target) {
+        // Scoop: nothing in the hand, so feel straight down for something loose lying underneath
+        // (a knocked-out body on the floor, a dropped crate). The joint then pulls the hand down to it.
+        const hit = this.world.castShape(handWorld, { x: 0, y: 0, z: 0, w: 1 }, { x: 0, y: -1, z: 0 }, new this.R.Ball(0.15), 0, 0.85, true,
+          undefined, undefined, undefined, undefined,
+          (c) => !this.ownsCollider(c) && !c.isSensor() && !!c.parent() && c.parent()!.isDynamic() && !this.ignoreGrab(c));
+        if (!hit) continue;
+        target = hit.collider;
+        grabPoint = { ...hit.witness1 };
+      }
       const other = (target as RAPIER_NS.Collider).parent()!;
-      const anchor2 = worldToLocal(other, handWorld);
+      const anchor2 = worldToLocal(other, grabPoint);
       h.joint = this.world.createImpulseJoint(
         this.R.JointData.spherical(HAND_LOCAL, anchor2), fb, other, true,
       );
