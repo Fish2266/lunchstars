@@ -1,6 +1,7 @@
 // Pause card + settings screen with key remapping. Plain DOM, no framework.
 import { ACTIONS, bind, codeName, DEFAULT_BINDINGS, saveSettings, settings, type Action } from './bindings';
 import type { Controls } from './controls';
+import { DEBUG } from './debug';
 import { slotColor, slotName } from './matchHud';
 import type { RosterEntry } from '../net/protocol';
 
@@ -230,12 +231,14 @@ export class Menu {
   showSettings() {
     this.listening = null;
     this.screen = 'settings';
-    const groups = [...new Set(ACTIONS.map((a) => a.group))];
+    // Debug-only keys (tuning panel, shove dummy) aren't listed unless debug mode is on.
+    const actions = ACTIONS.filter((a) => DEBUG || (a.action !== 'panel' && a.action !== 'shoveDummy'));
+    const groups = [...new Set(actions.map((a) => a.group))];
     this.root.innerHTML = `
       <div class="card">
         <h1>Controls</h1>
         <p>Click a binding, then press any key or mouse button. Esc cancels, Backspace clears.</p>
-        ${groups.map((g) => `<h2>${g}</h2>` + ACTIONS.filter((a) => a.group === g).map((a) => `
+        ${groups.map((g) => `<h2>${g}</h2>` + actions.filter((a) => a.group === g).map((a) => `
           <div class="row"><span>${a.label}</span>
             <button class="key" data-action="${a.action}" data-slot="0">${codeName(settings.bindings[a.action][0])}</button>
             <button class="key" data-action="${a.action}" data-slot="1">${codeName(settings.bindings[a.action][1])}</button>

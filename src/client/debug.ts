@@ -5,7 +5,16 @@ import { tuning } from '../sim/tuning';
 
 const STORAGE_KEY = 'lunchstars.tuning.v8'; // bump when tuning meanings change
 
+/**
+ * Debug tools (tuning panel, its saved values, shove-dummy) are only available on the dev server or with
+ * `?debug` in the URL, so players on the real site can't open them by accident mid-game.
+ */
+export const DEBUG = typeof location !== 'undefined'
+  && (['localhost', '127.0.0.1', '[::1]'].includes(location.hostname) || new URLSearchParams(location.search).has('debug'));
+
 export function loadSavedTuning() {
+  // Outside debug mode always play with the shipped values — a slider nudged once can't linger unseen.
+  if (!DEBUG) return;
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}');
     for (const k of Object.keys(tuning) as (keyof typeof tuning)[]) {
@@ -17,6 +26,7 @@ export function loadSavedTuning() {
 export function createDebugPanel(actions: { shoveDummy: () => void; reset: () => void; stats: { fps: number; stiffness: number; grounded: string } }) {
   const defaults = { ...tuning };
   const gui = new GUI({ title: 'Lunch Stars tuning' });
+  gui.hide(); // off by default; the panel key shows it (debug mode only)
   const save = () => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(tuning)); } catch { /* ignore */ }
   };

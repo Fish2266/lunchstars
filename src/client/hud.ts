@@ -3,6 +3,7 @@
 import { PLAYER_COLORS, type GameView, type PlayerView } from '../sim/sim';
 import { weapons } from '../sim/weapons';
 import { keyFor } from './bindings';
+import { DEBUG } from './debug';
 
 function esc(s: unknown) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
@@ -27,7 +28,8 @@ export class Hud {
       + `<b>${keyFor('handL')}</b> / <b>${keyFor('handR')}</b> left / right hand: tap to punch, hold to grab or hold a gun (let go = drop)<br />`
       + `Hanging on a ledge: hold <b>${keyFor('jump')}</b> to pull up, swap hands to climb · `
       + `<b>${keyFor('fire')}</b> shoot / throw grenade · <b>${keyFor('cycle')}</b> switch hands · `
-      + `<b>${keyFor('shoveDummy')}</b> shove dummy · <b>${keyFor('reset')}</b> reset · <b>${keyFor('panel')}</b> tuning · <b>Esc</b> menu`;
+      + (DEBUG ? `<b>${keyFor('shoveDummy')}</b> shove dummy · <b>${keyFor('panel')}</b> tuning · ` : '')
+      + `<b>${keyFor('reset')}</b> reset · <b>Esc</b> menu`;
   }
 
   update(view: GameView, extraDebug: (p: PlayerView) => string = () => '') {

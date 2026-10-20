@@ -13,7 +13,7 @@ import { loadSettings } from './client/bindings';
 import { Bot } from './client/bot';
 import { CameraRig } from './client/camera';
 import { Controls } from './client/controls';
-import { addGameFolders, createDebugPanel, loadSavedTuning } from './client/debug';
+import { addGameFolders, createDebugPanel, DEBUG, loadSavedTuning } from './client/debug';
 import { Hud } from './client/hud';
 import { MatchHud } from './client/matchHud';
 import { Menu, type MenuMode } from './client/menu';
@@ -279,8 +279,8 @@ async function main() {
       gore.fadeAll();
     }
     if (authority && sim.match.phase === 'matchOver' && controls.consume('jump')) sim.startMatch(); // rematch
-    if (controls.consume('shoveDummy')) shoveDummy();
-    if (controls.consume('panel')) gui.show(gui._hidden);
+    if (controls.consume('shoveDummy') && DEBUG) shoveDummy();
+    if (controls.consume('panel') && DEBUG) gui.show(gui._hidden);
 
     myInput = controls.read();
     crosshairAim(myInput);
