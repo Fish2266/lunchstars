@@ -238,6 +238,11 @@ export class Ragdoll {
     this.smoothVel.x = 0; this.smoothVel.z = 0;
   }
 
+  /** World positions of both hands. */
+  handPositions() {
+    return this.hands.map((h) => localToWorld(h.forearm.body, HAND_LOCAL));
+  }
+
   /** World position of the right hand (where guns are held). */
   rightHand() {
     return localToWorld(this.parts.get('forearmR')!.body, HAND_LOCAL);
@@ -693,7 +698,7 @@ function mul(a: Quaternion, b: Quaternion) {
   return tmpQ().multiplyQuaternions(a, b);
 }
 
-function localToWorld(body: Body, p: { x: number; y: number; z: number }) {
+export function localToWorld(body: Body, p: { x: number; y: number; z: number }) {
   const r = body.rotation();
   const t = body.translation();
   _qTmp.set(r.x, r.y, r.z, r.w);
@@ -701,7 +706,7 @@ function localToWorld(body: Body, p: { x: number; y: number; z: number }) {
   return { x: _v.x + t.x, y: _v.y + t.y, z: _v.z + t.z };
 }
 
-function worldToLocal(body: Body, p: { x: number; y: number; z: number }) {
+export function worldToLocal(body: Body, p: { x: number; y: number; z: number }) {
   const r = body.rotation();
   const t = body.translation();
   _qTmp.set(r.x, r.y, r.z, r.w).invert();

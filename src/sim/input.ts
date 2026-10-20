@@ -11,8 +11,10 @@ export interface PlayerInput {
   grab: boolean;
   /** Fire held weapon (or punch when unarmed). The sim edge-detects presses. */
   fire: boolean;
+  /** Throw the held weapon. Edge-detected. */
+  drop: boolean;
 }
 
 export function emptyInput(): PlayerInput {
-  return { moveX: 0, moveZ: 0, aimYaw: 0, aimPitch: 0, jump: false, grab: false, fire: false };
+  return { moveX: 0, moveZ: 0, aimYaw: 0, aimPitch: 0, jump: false, grab: false, fire: false, drop: false };
 }

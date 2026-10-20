@@ -2,13 +2,14 @@
 // so it works the same whether transforms come from a local sim or a network snapshot.
 import * as THREE from 'three';
 import type { EntityDesc, ShapeDesc } from '../sim/sim';
+import { buildModel } from './models';
 
 export class Renderer {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(65, 1, 0.05, 300);
   readonly gl: THREE.WebGLRenderer;
   /** One mesh per sim entity, same order as `sim.entities`. */
-  meshes: THREE.Mesh[] = [];
+  meshes: THREE.Object3D[] = [];
   private builtVersion = -1;
   private sun: THREE.DirectionalLight;
 
@@ -56,10 +57,17 @@ export class Renderer {
   }
 
   /** (Re)build meshes if the entity list changed. */
-  sync(entities: readonly EntityDesc[], version: number) {
-    if (version === this.builtVersion) return;
+  /** Returns true if it rebuilt. */
+  sync(entities: readonly EntityDesc[], version: number): boolean {
+    if (version === this.builtVersion) return false;
     for (const m of this.meshes) this.scene.remove(m);
     this.meshes = entities.map((e) => {
+      if (e.model) {
+        const size = e.shape.kind === 'ball' ? e.shape.r : 0.1;
+        const model = buildModel(e.model, size);
+        this.scene.add(model);
+        return model;
+      }
       const mesh = new THREE.Mesh(geometryFor(e.shape), materialFor(e));
       mesh.castShadow = e.role !== 'static' || e.shape.kind !== 'box' || (e.shape as { hy: number }).hy > 0.05;
       mesh.receiveShadow = true;
@@ -68,6 +76,7 @@ export class Renderer {
       return mesh;
     });
     this.builtVersion = version;
+    return true;
   }
 
   /** Apply a flat [px,py,pz,qx,qy,qz,qw]* array. */

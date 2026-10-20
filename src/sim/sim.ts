@@ -3,9 +3,9 @@
 // The same code can run in single-player, on the multiplayer host, or on a Node server.
 import type RAPIER_NS from '@dimforge/rapier3d-compat';
 import { emptyInput, type PlayerInput } from './input';
-import { Ragdoll } from './ragdoll';
+import { Ragdoll, worldToLocal } from './ragdoll';
 import { tuning } from './tuning';
-import { explosive, PICKUP_RESPAWN, punch, WEAPON_KINDS, weapons, type WeaponKind } from './weapons';
+import { explosive, handling, PICKUP_RESPAWN, punch, WEAPON_KINDS, weapons, type WeaponKind } from './weapons';
 
 export const TICK_RATE = 60;
 export const DT = 1 / TICK_RATE;
@@ -23,18 +23,24 @@ export interface EntityDesc {
   /** 'player' parts get the character look; 'static' never moves; 'fx' is non-physical (held guns, pickups). */
   role: 'static' | 'prop' | 'player' | 'fx';
   playerId?: number;
+  /** Render a detailed model instead of the plain collision shape. */
+  model?: ModelKind;
 }
+
+export type ModelKind = WeaponKind | 'grenadeLive' | 'head';
 
 export type V3 = { x: number; y: number; z: number };
 type Q = { x: number; y: number; z: number; w: number };
 
 /** Things the client turns into effects (and, in multiplayer, reliable events). Drain with `drainEvents()`. */
 export type SimEvent =
-  | { type: 'shot'; player: number; weapon: WeaponKind; from: V3; to: V3; hit: boolean }
+  | { type: 'shot'; player: number; weapon: WeaponKind; from: V3; to: V3; hit: boolean; first: boolean; dir: V3 }
   | { type: 'punch'; player: number; to: V3; hit: boolean }
   | { type: 'throw'; player: number; pos: V3 }
   | { type: 'explosion'; pos: V3; radius: number }
-  | { type: 'hit'; player: number; pos: V3; strength: number }
+  /** A player got hit. `entity`/`local` pin the wound to a body part (for blood); `dir` is the shot direction. */
+  | { type: 'hit'; player: number; by?: number; pos: V3; strength: number; entity: number; local: V3; dir: V3 }
+  | { type: 'drop'; player: number; weapon: WeaponKind; thrown: boolean }
   | { type: 'pickup'; player: number; weapon: WeaponKind; pos: V3 }
   | { type: 'empty'; player: number };
 
@@ -81,6 +87,11 @@ export interface Fighter {
   ammo: number;
   cooldown: number;
   prevFire: boolean;
+  prevDrop: boolean;
+  /** Knockback taken this tick; enough of it knocks the gun loose. */
+  hitAccum: number;
+  /** Who last hit us this tick (so the dropped gun flies the right way). */
+  hitDir: V3;
   punchTimer: number;
   slot: number;
   /** Held-weapon models, one per kind; only the current one is shown. */
@@ -104,6 +115,20 @@ interface Grenade {
 }
 
 const GRENADE_POOL = 12;
+const LOOSE_PER_KIND = 4;
+
+/** A gun lying around (or flying through the air) as a real physics object. */
+interface LooseGun {
+  kind: WeaponKind;
+  body: RAPIER_NS.RigidBody;
+  collider: RAPIER_NS.Collider;
+  active: boolean;
+  ammo: number;
+  age: number;
+  /** Player who threw it, and for how long it can still bonk people. */
+  thrownBy: number;
+  bonkTimer: number;
+}
 
 export class Sim {
   readonly world: RAPIER_NS.World;
@@ -116,6 +141,9 @@ export class Sim {
   private spawns: V3[] = [];
   private pickups: PickupSpot[] = [];
   private grenades: Grenade[] = [];
+  private loose: LooseGun[] = [];
+  /** Entity index for each rigid body handle (for pinning blood to body parts). */
+  private entityOfBody = new Map<number, number>();
   private events: SimEvent[] = [];
   private rngState = 0x1234567;
   /** Bumped whenever `entities` changes so the renderer knows to rebuild meshes. */
@@ -129,6 +157,7 @@ export class Sim {
     this.world.numSolverIterations = 8;
     this.buildArena();
     this.buildGrenadePool();
+    this.buildLoosePool();
   }
 
   addPlayer(id: number): Ragdoll {
@@ -139,14 +168,17 @@ export class Sim {
     this.players.set(id, r);
     for (const part of r.parts.values()) {
       const s = part.def.shape;
-      this.addEntity(part.body, s, part.def.name === 'head' ? 0xffe0bd : color, 'player', id);
+      this.addEntity(part.body, s, part.def.name === 'head' ? 0xffe0bd : color, 'player', id, part.def.name === 'head' ? 'head' : undefined);
     }
     const held = {} as Record<WeaponKind, Virtual>;
     for (const k of WEAPON_KINDS) {
       held[k] = new Virtual();
-      this.addEntity(held[k], weapons[k].shape, weapons[k].color, 'fx', id);
+      this.addEntity(held[k], weapons[k].shape, weapons[k].color, 'fx', id, k);
     }
-    this.fighters.set(id, { weapon: null, ammo: 0, cooldown: 0, prevFire: false, punchTimer: 0, slot, held });
+    this.fighters.set(id, {
+      weapon: null, ammo: 0, cooldown: 0, prevFire: false, prevDrop: false, hitAccum: 0, hitDir: { x: 0, y: 0, z: 0 },
+      punchTimer: 0, slot, held,
+    });
     return r;
   }
 
@@ -174,6 +206,7 @@ export class Sim {
     for (const p of this.props) this.resetProp(p);
     for (const p of this.pickups) p.respawn = 0;
     for (const g of this.grenades) this.deactivateGrenade(g);
+    for (const g of this.loose) this.deactivateLoose(g);
   }
 
   step(inputs: ReadonlyMap<number, PlayerInput>) {
@@ -185,12 +218,22 @@ export class Sim {
       r.aimHands = f.weapon ? weapons[f.weapon].hands : f.punchTimer > 0 ? 1 : 0;
       r.step(input, DT);
       this.updateFighter(id, r, f, input);
+      this.updateHandling(id, r, f, input);
     }
     this.world.step();
     this.tick++;
 
     this.updateGrenades();
+    this.updateLoose();
     this.updatePickups();
+    // Big hits knock the gun out of your hands.
+    for (const [id, f] of this.fighters) {
+      if (f.weapon && f.hitAccum >= handling.dropThreshold) {
+        const d = f.hitDir;
+        this.dropWeapon(id, { x: d.x * 4, y: 3, z: d.z * 4 }, false);
+      }
+      f.hitAccum = 0;
+    }
     this.updateHeldModels(inputs);
 
     // Falling out of the world. (Phase 4 turns this into elimination.)
@@ -234,16 +277,25 @@ export class Sim {
       for (let i = 0; i < w.pellets; i++) {
         const d = this.spreadDir(dir, w.spread);
         const res = this.hitscan(id, origin, d, w.range, w.knockback, w.falloff, w.lift);
-        this.events.push({ type: 'shot', player: id, weapon: f.weapon, from: muzzle, to: res.point, hit: res.hit });
+        this.events.push({ type: 'shot', player: id, weapon: f.weapon, from: muzzle, to: res.point, hit: res.hit, first: i === 0, dir: d });
       }
       if (w.recoil > 0) {
         const s = (r.totalMass / 10) * w.recoil;
         r.chest.applyImpulse({ x: -dir.x * s, y: -dir.y * s * 0.3, z: -dir.z * s }, true);
       }
+      // Kick the gun arm(s) up and back.
+      const arms = w.hands === 2 ? ['forearmR', 'forearmL'] as const : ['forearmR'] as const;
+      for (const a of arms) {
+        const b = r.parts.get(a)!.body;
+        const s = b.mass() * w.armKick;
+        b.applyImpulse({ x: -dir.x * s * 0.5, y: s, z: -dir.z * s * 0.5 }, true);
+      }
     }
     if (f.ammo <= 0) {
-      f.weapon = null;
       this.events.push({ type: 'empty', player: id });
+      // Toss the empty gun aside (it can't be picked up, and vanishes soon).
+      if (f.weapon !== 'grenade') this.dropWeapon(id, { x: -dir.z * 2, y: 2.5, z: dir.x * 2 }, false);
+      else f.weapon = null;
     }
   }
 
@@ -269,7 +321,11 @@ export class Sim {
       // Scale to the whole character's mass so the same number feels the same on every body part.
       const s = owner.totalMass / 10;
       owner.hit(body, { x: imp.x * s, y: imp.y * s, z: imp.z * s }, point, strength);
-      this.events.push({ type: 'hit', player: owner.playerId, pos: point, strength });
+      this.noteHit(owner.playerId, strength, dir);
+      this.events.push({
+        type: 'hit', player: owner.playerId, by: shooter, pos: point, strength,
+        entity: this.entityOfBody.get(body.handle) ?? -1, local: worldToLocal(body, point), dir,
+      });
     } else {
       const s = body.mass() / 10;
       body.applyImpulseAtPoint({ x: imp.x * s, y: imp.y * s, z: imp.z * s }, point, true);
@@ -339,11 +395,195 @@ export class Sim {
       for (const part of r.parts.values()) maxF = Math.max(maxF, push(part.body, part.body.mass()));
       if (maxF > 0) {
         r.addStun(explosive.stun * maxF);
-        this.events.push({ type: 'hit', player: r.playerId, pos: r.chest.translation(), strength: explosive.strength * maxF });
+        const cp = r.chest.translation();
+        const away = norm({ x: cp.x - c.x, y: cp.y - c.y + 0.5, z: cp.z - c.z });
+        this.noteHit(r.playerId, explosive.strength * maxF * 5, away);
+        // Blood out of the side facing the blast.
+        this.events.push({
+          type: 'hit', player: r.playerId, pos: cp, strength: explosive.strength * maxF * 2,
+          entity: this.entityOfBody.get(r.chest.handle) ?? -1, local: worldToLocal(r.chest, { x: cp.x - away.x * 0.15, y: cp.y, z: cp.z - away.z * 0.15 }),
+          dir: away,
+        });
       }
     }
     for (const p of this.props) push(p.body, p.body.mass());
+    for (const g of this.loose) if (g.active) push(g.body, g.body.mass());
     this.events.push({ type: 'explosion', pos: c, radius: R });
+  }
+
+  private noteHit(id: number, strength: number, dir: V3) {
+    const f = this.fighters.get(id);
+    if (!f) return;
+    f.hitAccum += strength;
+    f.hitDir = dir;
+  }
+
+  // ---------------------------------------------------------------- loose guns
+
+  /** Throw button, and picking guns up with a grab. */
+  private updateHandling(id: number, r: Ragdoll, f: Fighter, input: PlayerInput) {
+    const pressedDrop = input.drop && !f.prevDrop;
+    f.prevDrop = input.drop;
+    if (pressedDrop && f.weapon && r.stiffness > 0.35) {
+      const d = aimDir(input.aimYaw, input.aimPitch);
+      const s = handling.throwSpeed;
+      this.dropWeapon(id, { x: d.x * s, y: d.y * s + 2.5, z: d.z * s }, true);
+      return;
+    }
+    // Grabbing a gun (floating or loose) picks it up, swapping out whatever you hold.
+    if (!input.grab || r.stiffness < 0.35) return;
+    const hands = r.handPositions();
+    const near = (p: V3) => hands.some((h) => Math.hypot(h.x - p.x, h.y - p.y, h.z - p.z) < handling.grabReach);
+    for (const g of this.loose) {
+      if (!g.active || g.ammo <= 0 || g.age < handling.pickupDelay || !near(g.body.translation())) continue;
+      if (f.weapon) this.dropWeapon(id, { x: 0, y: 2, z: 0 }, false);
+      this.takeLoose(id, f, g);
+      return;
+    }
+    for (const p of this.pickups) {
+      if (p.respawn > 0 || !near(p.model.pos)) continue;
+      if (f.weapon) this.dropWeapon(id, { x: 0, y: 2, z: 0 }, false);
+      this.takeSpawner(id, p);
+      return;
+    }
+  }
+
+  /** Turn the held weapon into a loose physics gun. `vel` is added to the hand's velocity. */
+  dropWeapon(id: number, vel: V3, thrown: boolean) {
+    const f = this.fighters.get(id);
+    const r = this.players.get(id);
+    if (!f || !r || !f.weapon) return;
+    const kind = f.weapon;
+    f.weapon = null;
+    this.events.push({ type: 'drop', player: id, weapon: kind, thrown });
+    if (kind === 'grenade' && f.ammo <= 0) return;
+    const g = this.loose.find((x) => x.kind === kind && !x.active) ?? this.oldestLoose(kind);
+    if (!g) return;
+    const held = f.held[kind];
+    const hv = r.parts.get('forearmR')!.body.linvel();
+    for (const p of this.players.values()) p.releaseIfAttachedTo(g.body.handle);
+    g.active = true;
+    g.ammo = f.ammo;
+    g.age = 0;
+    g.thrownBy = id;
+    g.bonkTimer = thrown ? 1.2 : 0;
+    // Don't collide with the thrower for a moment, so it leaves the hand cleanly.
+    g.collider.setCollisionGroups(groups(WORLD_GROUP, 0xffff ^ playerBit(f.slot)));
+    g.body.setEnabled(true);
+    g.body.setTranslation(held.pos.y > -500 ? held.pos : r.rightHand(), true);
+    g.body.setRotation(held.rot, true);
+    g.body.setLinvel({ x: hv.x * 0.5 + vel.x, y: hv.y * 0.5 + vel.y, z: hv.z * 0.5 + vel.z }, true);
+    g.body.setAngvel({ x: (this.rand() - 0.5) * 14, y: (this.rand() - 0.5) * 14, z: (this.rand() - 0.5) * 14 }, true);
+    f.ammo = 0;
+  }
+
+  private oldestLoose(kind: WeaponKind) {
+    let best: LooseGun | undefined;
+    for (const g of this.loose) if (g.kind === kind && (!best || g.age > best.age)) best = g;
+    return best;
+  }
+
+  private takeLoose(id: number, f: Fighter, g: LooseGun) {
+    f.weapon = g.kind;
+    f.ammo = g.ammo;
+    f.cooldown = 0.15;
+    this.events.push({ type: 'pickup', player: id, weapon: g.kind, pos: { ...g.body.translation() } });
+    this.deactivateLoose(g);
+  }
+
+  private takeSpawner(id: number, p: PickupSpot) {
+    this.giveWeapon(id, p.kind);
+    p.respawn = PICKUP_RESPAWN;
+    p.model.hide();
+    this.events.push({ type: 'pickup', player: id, weapon: p.kind, pos: p.pos });
+  }
+
+  private updateLoose() {
+    for (const g of this.loose) {
+      if (!g.active) continue;
+      g.age += DT;
+      const p = g.body.translation();
+      if (p.y < tuning.killY || g.age > (g.ammo > 0 ? handling.despawn : 3)) { this.deactivateLoose(g); continue; }
+      if (g.age > 0.3 && g.bonkTimer > 0) g.collider.setCollisionGroups(groups(WORLD_GROUP, 0xffff));
+      // Thrown guns bonk whoever they hit.
+      if (g.bonkTimer > 0) {
+        g.bonkTimer -= DT;
+        const v = g.body.linvel();
+        const speed = Math.hypot(v.x, v.y, v.z);
+        if (speed > handling.bonkSpeed) {
+          let victim: Ragdoll | undefined;
+          let part: RAPIER_NS.RigidBody | null = null;
+          this.world.intersectionsWithShape(p, { x: 0, y: 0, z: 0, w: 1 }, new this.R.Ball(0.22), (c) => {
+            const owner = [...this.players.values()].find((r) => r.ownsCollider(c));
+            if (owner && owner.playerId !== g.thrownBy) { victim = owner; part = c.parent(); return false; }
+            return true;
+          });
+          if (victim && part) {
+            const vr = victim as Ragdoll;
+            const d = { x: v.x / speed, y: v.y / speed, z: v.z / speed };
+            const kb = handling.throwKnockback;
+            const s = vr.totalMass / 10;
+            vr.hit(part, { x: d.x * kb * s, y: (d.y + 0.3) * kb * s, z: d.z * kb * s }, p, kb);
+            this.noteHit(vr.playerId, kb, d);
+            this.events.push({
+              type: 'hit', player: vr.playerId, by: g.thrownBy, pos: { ...p }, strength: kb,
+              entity: this.entityOfBody.get((part as RAPIER_NS.RigidBody).handle) ?? -1,
+              local: worldToLocal(part, p), dir: d,
+            });
+            g.bonkTimer = 0;
+            // Drop at the victim's feet rather than bouncing back to the thrower.
+            g.body.setLinvel({ x: v.x * 0.15, y: 1.5, z: v.z * 0.15 }, true);
+          }
+        }
+      }
+      // Walk over a loaded gun while unarmed to pick it up.
+      if (g.ammo <= 0 || g.age < handling.pickupDelay) continue;
+      for (const [id, r] of this.players) {
+        const f = this.fighters.get(id)!;
+        if (f.weapon || r.stiffness < 0.35) continue;
+        // You can't catch your own throw by walking into it straight away.
+        if (id === g.thrownBy && g.age < 1.5) continue;
+        const c = r.pelvis.translation();
+        if (Math.hypot(c.x - p.x, c.z - p.z) < 0.7 && p.y < c.y && c.y - p.y < 1.3) {
+          this.takeLoose(id, f, g);
+          break;
+        }
+      }
+    }
+  }
+
+  private deactivateLoose(g: LooseGun) {
+    for (const r of this.players.values()) r.releaseIfAttachedTo(g.body.handle);
+    g.active = false;
+    g.bonkTimer = 0;
+    g.body.setEnabled(false);
+    g.body.setTranslation({ x: 0, y: HIDDEN_Y, z: 0 }, false);
+    g.body.setLinvel({ x: 0, y: 0, z: 0 }, false);
+  }
+
+  private buildLoosePool() {
+    for (const kind of WEAPON_KINDS) {
+      const s = weapons[kind].shape;
+      for (let i = 0; i < LOOSE_PER_KIND; i++) {
+        const body = this.world.createRigidBody(
+          this.R.RigidBodyDesc.dynamic().setTranslation(0, HIDDEN_Y, 0).setEnabled(false).setCcdEnabled(true)
+            .setAngularDamping(0.8).setLinearDamping(0.1),
+        );
+        const desc = s.kind === 'box' ? this.R.ColliderDesc.cuboid(s.hx, s.hy, s.hz)
+          : s.kind === 'ball' ? this.R.ColliderDesc.ball(s.r) : this.R.ColliderDesc.capsule(s.hh, s.r);
+        const collider = this.world.createCollider(desc.setDensity(900).setFriction(0.7).setRestitution(0.2), body);
+        this.loose.push({ kind, body, collider, active: false, ammo: 0, age: 0, thrownBy: -1, bonkTimer: 0 });
+        this.addEntity(body, s, weapons[kind].color, 'prop', undefined, kind);
+      }
+    }
+  }
+
+  /** Where guns can be had right now (for bots). */
+  availableWeapons(): { kind: WeaponKind; pos: V3 }[] {
+    const out: { kind: WeaponKind; pos: V3 }[] = [];
+    for (const p of this.pickups) if (p.respawn === 0) out.push({ kind: p.kind, pos: p.pos });
+    for (const g of this.loose) if (g.active && g.ammo > 0 && g.age > handling.pickupDelay) out.push({ kind: g.kind, pos: { ...g.body.translation() } });
+    return out;
   }
 
   private muzzle(r: Ragdoll, kind: WeaponKind, dir: V3): V3 {
@@ -393,10 +633,7 @@ export class Sim {
         if (f.weapon || r.stiffness < 0.35) continue;
         const c = r.pelvis.translation();
         if (Math.hypot(c.x - p.pos.x, c.z - p.pos.z) < 0.9 && Math.abs(c.y - tuning.standHeight - p.pos.y) < 1.2) {
-          this.giveWeapon(id, p.kind);
-          p.respawn = PICKUP_RESPAWN;
-          p.model.hide();
-          this.events.push({ type: 'pickup', player: id, weapon: p.kind, pos: p.pos });
+          this.takeSpawner(id, p);
           break;
         }
       }
@@ -438,9 +675,10 @@ export class Sim {
 
   // ---------------------------------------------------------------- world building
 
-  private addEntity(source: TransformSource, shape: ShapeDesc, color: number, role: EntityDesc['role'], playerId?: number) {
+  private addEntity(source: TransformSource, shape: ShapeDesc, color: number, role: EntityDesc['role'], playerId?: number, model?: ModelKind) {
     const id = source instanceof Virtual ? this.nextVirtualId-- : (source as RAPIER_NS.RigidBody).handle;
-    this.entities.push({ id, shape, color, role, playerId });
+    if (!(source instanceof Virtual)) this.entityOfBody.set(id, this.entities.length);
+    this.entities.push({ id, shape, color, role, playerId, model });
     this.sources.push(source);
     this.entityVersion++;
   }
@@ -468,7 +706,7 @@ export class Sim {
   private addPickup(kind: WeaponKind, pos: V3) {
     const model = new Virtual();
     this.pickups.push({ kind, pos, respawn: 0, model });
-    this.addEntity(model, weapons[kind].shape, weapons[kind].color, 'fx');
+    this.addEntity(model, weapons[kind].shape, weapons[kind].color, 'fx', undefined, kind);
   }
 
   private resetProp(p: Prop) {
@@ -488,7 +726,7 @@ export class Sim {
         this.R.ColliderDesc.ball(0.1).setDensity(400).setRestitution(0.35).setFriction(0.8), body,
       );
       this.grenades.push({ body, collider, active: false, fuse: 0, owner: -1 });
-      this.addEntity(body, { kind: 'ball', r: 0.1 }, weapons.grenade.color, 'prop');
+      this.addEntity(body, { kind: 'ball', r: 0.1 }, weapons.grenade.color, 'prop', undefined, 'grenadeLive');
     }
   }
 

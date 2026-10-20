@@ -36,10 +36,17 @@ Work one phase at a time. A phase is done only when its "done when" is true. Com
 - Added waddle, hip twist, acceleration lean, hip bob, floppier head/arms. Knocked-down characters scramble back up through their legs.
 - Round 2: neck muscle holds the head up; walking now pushes off the planted foot (no force at the hips), steps are slower and weightier (~3.5/s) with a sideways weight shift over the stance foot; leg swing kicks back on the hips. Any hit causes a 0.4 s stagger (no footing, no braking) so knockback still carries. Knockback raised to compensate: pistol ~1.1 m per hit, shotgun ~2.5 m.
 
+## Gun handling & polish (done, first pass)
+- Guns are real objects: big hits (≥ 40 knockback in one tick, e.g. a close shotgun blast or a grenade) knock your gun loose, keeping its ammo. Empty guns get tossed and vanish after 3 s.
+- Pick up by walking over a gun while unarmed, or by grabbing one (swaps with what you hold). X / middle mouse throws your gun; a thrown gun bonks whoever it hits.
+- Feel: arm recoil kick, camera recoil climb, hit-marker on the crosshair, shell casings (brass / red shotgun shells).
+- Models: pistol, shotgun, pineapple grenade (live ones blink red), cartoon faces on heads.
+- Gore: pulsing cartoon blood fountains pinned to the wound, streaky droplets, splat decals. Panel → Gore: blood / ketchup & mustard / off, amount, "Mop the floor".
+- The bot fetches the nearest gun when unarmed.
+
 ## Known feel issues / tuning backlog
 - Grab reach takes ~0.8 s; consider stronger arm gains while grabbing.
 - One-handed lifting of a 20 kg crate doesn't work; two hands + stronger arms, or lighter props.
 - Slight residual wobble (~5°) after recovering from a knockdown.
 - Aiming arms sway ±8° for ~0.7 s after a fast flick (cosmetic: shots use the crosshair aim, not the arm).
 - Weapon sliders aren't saved to localStorage yet (only `tuning` is).
-- Should a big hit make you drop your gun? Undecided.

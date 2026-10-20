@@ -60,6 +60,7 @@ export class Controls {
       jump: this.keys.has('Space'),
       grab: this.keys.has('KeyE') || this.mouseButtons.has(2),
       fire: this.clickLatch || this.mouseButtons.has(0) || this.keys.has('KeyQ'),
+      drop: this.keys.has('KeyX') || this.mouseButtons.has(1),
     };
   }
 

@@ -10,6 +10,8 @@ src/
     input.ts    PlayerInput — the only thing a player sends to the sim
   render/     Three.js scene; draws EntityDesc[] + a flat Float32Array of transforms
     effects.ts  Tracers, flashes, explosions, camera shake — driven only by SimEvents
+    gore.ts     Blood fountains/splats + shell casings (pooled InstancedMeshes, client-only)
+    models.ts   Display models (guns, grenade, faces); collision still uses simple shapes
   client/     Browser-only: keyboard/mouse controls, lil-gui tuning panel, bot (makes PlayerInput like a human)
   main.ts     Wires it together: input -> sim.step (fixed 60 Hz) -> transforms -> render
 ```
@@ -51,3 +53,12 @@ npm run typecheck
 - Shots don't come from the gun model. They come from `ragdoll.aimOrigin()` (above the chest) along the input's aim yaw/pitch. The client turns the crosshair into that yaw/pitch by raycasting the rendered scene from the camera and aiming the origin at the hit point (`crosshairAim` in main.ts), so the over-the-shoulder camera stays accurate.
 - `Sim.hitscan` is the one knockback path: ray → impulse at the hit point scaled by the target's total mass → stun from the weapon's knockback number.
 - Grenades are a fixed pool of 12 bodies, enabled on throw, which don't collide with the thrower.
+
+## Loose guns
+- A pool of 4 physics bodies per weapon kind (stable entity indices). Dropping/throwing enables one at the hand with the held model's transform; picking up disables it. Ammo travels with the gun.
+- `Fighter.hitAccum` sums knockback per tick; at `handling.dropThreshold` the gun is knocked loose.
+
+## Gore (why it's cheap)
+- `hit` events carry the body part's entity index and the wound point in that part's local frame. The client pins a "wound" emitter there, so fountains ride the ragdoll.
+- Droplets are struct-of-arrays ballistic points drawn as one InstancedMesh (stretched along velocity). One ground raycast per wound every 0.25 s; droplets below that height become splats in a ring-buffer InstancedMesh.
+- Nothing touches physics or the network.

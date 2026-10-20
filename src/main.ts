@@ -8,7 +8,9 @@ import { Renderer } from './render/renderer';
 import type { PlayerInput } from './sim/input';
 import { DT, Sim } from './sim/sim';
 import { tuning } from './sim/tuning';
-import { explosive, punch, weapons, type WeaponKind } from './sim/weapons';
+import { explosive, handling, punch, weapons, type WeaponKind } from './sim/weapons';
+import { Gore, goreSettings } from './render/gore';
+import { animateModels } from './render/models';
 
 const LOCAL_ID = 0;
 const DUMMY_ID = 1;
@@ -24,6 +26,19 @@ async function main() {
 
   const renderer = new Renderer(document.body);
   const effects = new Effects(renderer.scene, LOCAL_ID);
+  // Ground height under a point, from the level geometry (used by blood splats and casings).
+  const downRay = new THREE.Raycaster();
+  const DOWN = new THREE.Vector3(0, -1, 0);
+  let staticMeshes: THREE.Object3D[] = [];
+  const groundAt = (p: { x: number; y: number; z: number }) => {
+    downRay.set(new THREE.Vector3(p.x, p.y + 0.05, p.z), DOWN);
+    downRay.far = 40;
+    const hit = downRay.intersectObjects(staticMeshes, false)[0];
+    return hit ? hit.point.y : -Infinity;
+  };
+  const gore = new Gore(renderer.scene, groundAt);
+  const crosshair = document.getElementById('crosshair')!;
+  let hitMarkerTimer = 0;
   const controls = new Controls(renderer.gl.domElement);
   const transforms = new Float32Array(4096 * 7);
 
@@ -66,6 +81,16 @@ async function main() {
   const botFolder = gui.addFolder('Dummy');
   botFolder.add(bot, 'mode', ['idle', 'chase', 'chase + shoot'] satisfies BotMode[]).name('behavior');
   botFolder.add({ arm: () => sim.giveWeapon(DUMMY_ID, 'pistol') }, 'arm').name('Give dummy a pistol');
+  const hf = wf.addFolder('handling');
+  hf.add(handling, 'dropThreshold', 5, 200, 1).name('hit to drop gun');
+  hf.add(handling, 'throwSpeed', 0, 25, 0.5).name('throw speed');
+  hf.add(handling, 'throwKnockback', 0, 30, 0.5).name('thrown gun bonk');
+  hf.add(handling, 'grabReach', 0.1, 1, 0.01).name('grab reach');
+  hf.close();
+  const gf = gui.addFolder('Gore');
+  gf.add(goreSettings, 'mode', ['blood', 'ketchup & mustard', 'off']);
+  gf.add(goreSettings, 'amount', 0, 3, 0.05);
+  gf.add({ clear: () => gore.clear() }, 'clear').name('Mop the floor');
 
   const hud = {
     weapon: document.querySelector<HTMLElement>('#hud .weapon')!,
@@ -96,7 +121,7 @@ async function main() {
     camFwd.set(0, 0, -1).applyQuaternion(renderer.camera.quaternion);
     raycaster.set(renderer.camera.position, camFwd);
     raycaster.far = 80;
-    const hit = raycaster.intersectObjects(pickable(), false)[0];
+    const hit = raycaster.intersectObjects(pickable(), true)[0];
     aimPoint.copy(renderer.camera.position).addScaledVector(camFwd, hit ? hit.distance : 80);
     const o = me.aimOrigin();
     const dx = aimPoint.x - o.x, dy = aimPoint.y - o.y, dz = aimPoint.z - o.z;
@@ -128,12 +153,32 @@ async function main() {
       acc -= DT;
     }
     controls.endFrame();
-    for (const e of sim.drainEvents()) effects.handle(e);
+    // Transforms first, so effects can pin blood to where body parts are now.
+    if (renderer.sync(sim.entities, sim.entityVersion)) {
+      staticMeshes = renderer.meshes.filter((_, i) => sim.entities[i].role === 'static');
+    }
+    sim.writeTransforms(transforms);
+    for (const e of sim.drainEvents()) {
+      effects.handle(e);
+      if (e.type === 'hit') {
+        gore.wound(e, transforms);
+        if (e.by === LOCAL_ID && e.player !== LOCAL_ID) hitMarkerTimer = 0.15;
+      } else if (e.type === 'shot' && e.first) {
+        gore.casing(e.from, e.dir, e.weapon === 'shotgun');
+        if (e.player === LOCAL_ID) {
+          // Recoil climbs your aim a little; you pull it back down.
+          controls.pitch = Math.min(1.0, controls.pitch + weapons[e.weapon].camKick);
+          controls.yaw += (Math.random() - 0.5) * weapons[e.weapon].camKick * 0.5;
+        }
+      }
+    }
     effects.update(frameDt);
+    gore.update(frameDt, transforms);
+    animateModels(now / 1000);
+    hitMarkerTimer = Math.max(0, hitMarkerTimer - frameDt);
+    crosshair.classList.toggle('hit', hitMarkerTimer > 0);
 
     // Render.
-    renderer.sync(sim.entities, sim.entityVersion);
-    sim.writeTransforms(transforms);
     renderer.applyTransforms(transforms);
 
     // Over-the-shoulder third-person camera, smoothed, with shake.
@@ -168,7 +213,7 @@ async function main() {
   requestAnimationFrame(frame);
 
   // Exposed for debugging in the console.
-  Object.assign(window, { sim, tuning, weapons, explosive, bot, effects });
+  Object.assign(window, { sim, tuning, weapons, explosive, bot, effects, gore, goreSettings, handling });
 }
 
 main();
