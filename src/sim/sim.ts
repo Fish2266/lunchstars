@@ -6,7 +6,7 @@ import { emptyInput, type PlayerInput } from './input';
 import { Ragdoll, worldToLocal, type ArmMode } from './ragdoll';
 import { tuning } from './tuning';
 import { explosive, handling, PICKUP_RESPAWN, punch, WEAPON_KINDS, weapons, type WeaponKind } from './weapons';
-import { beltAt, buildIncinerator, inBox, INCINERATOR, type ArenaBuilder } from './incinerator';
+import { beltAt, buildIncinerator, inBox, INCINERATOR, type ArenaBuilder, type Surface } from './incinerator';
 
 export const TICK_RATE = 60;
 export const DT = 1 / TICK_RATE;
@@ -30,13 +30,16 @@ export interface EntityDesc {
   emissive?: number;
   /** For conveyor belts: surface velocity, so the renderer can scroll the belt the right way. */
   flow?: { x: number; z: number };
+  /** Procedural texture for level geometry. */
+  surface?: Surface;
 }
 
-export type ModelKind = WeaponKind | 'grenadeLive' | 'head' | 'torso' | 'hips' | 'limb' | 'forearm' | 'shin' | 'belt' | 'rail';
+export type ModelKind = WeaponKind | 'grenadeLive' | 'head' | 'torso' | 'hips' | 'limb' | 'forearm' | 'shin' | 'belt' | 'rail' | 'stamper';
 
 export type V3 = { x: number; y: number; z: number };
-export type HitCause = 'punch' | 'shot' | 'pellet' | 'blast' | 'bonk' | 'shove' | 'flame';
+export type HitCause = 'punch' | 'shot' | 'pellet' | 'blast' | 'bonk' | 'shove' | 'flame' | 'stamp';
 export type FurnaceState = 'idle' | 'warn' | 'burst';
+export type StamperPhase = 'up' | 'warn' | 'slam' | 'down' | 'rise';
 export type MatchPhase = 'practice' | 'countdown' | 'playing' | 'roundOver' | 'matchOver';
 type Q = { x: number; y: number; z: number; w: number };
 
@@ -55,6 +58,7 @@ export type SimEvent =
   | { type: 'eliminated'; player: number; cause: 'fall' | 'fire'; pos: V3 }
   | { type: 'burn'; pos: V3 }
   | { type: 'railBreak'; pos: V3 }
+  | { type: 'stamp'; pos: V3 }
   | { type: 'gunSpawn'; weapon: WeaponKind; pos: V3 }
   | { type: 'furnace'; state: FurnaceState }
   | { type: 'countdown'; round: number }
@@ -197,6 +201,8 @@ export class Sim {
   private beltCrates: { body: RAPIER_NS.RigidBody; active: boolean }[] = [];
   private beltTimer = 2;
   private gunTimer = 1.5;
+  /** Stamping presses (kinematic heads) and the cycle phase each is in. */
+  readonly stampers: { body: RAPIER_NS.RigidBody; x: number; z: number; offset: number; phase: StamperPhase; hit: Set<number> }[] = [];
   /** Breakable pit railing sections. */
   private rails: { body: RAPIER_NS.RigidBody; collider: RAPIER_NS.Collider; broken: boolean; hp: number; pos: V3 }[] = [];
   readonly furnace = { state: 'idle' as FurnaceState, timer: 8, hit: new Set<number>() };
@@ -228,6 +234,7 @@ export class Sim {
     this.buildGrenadePool();
     this.buildLoosePool();
     this.buildBeltCrates();
+    this.buildStampers();
   }
 
   addPlayer(id: number): Ragdoll {
@@ -320,6 +327,7 @@ export class Sim {
       this.updateFire(id, r, f, input);
     }
     this.updateCarry();
+    this.moveStampers();
     this.world.step();
     this.tick++;
 
@@ -448,8 +456,92 @@ export class Sim {
 
   // ---------------------------------------------------------------- hazards
 
+  /** Where each press is in its cycle, and set its kinematic target for this tick. */
+  private moveStampers() {
+    const t = tuning;
+    const map = INCINERATOR;
+    const T = t.stamperPeriod;
+    const time = this.match.phase === 'countdown' ? 0 : this.tick * DT;
+    for (const st of this.stampers) {
+      const lt = ((time / T + st.offset) % 1) * T;
+      // up 0..A, warn A..B, slam B..C, down C..D, rise D..T
+      const A = T - 2.0, B = T - 1.3, C = T - 1.15, D = T - 0.7;
+      let y = map.stamperUpY, x = st.x;
+      let phase: StamperPhase = 'up';
+      if (lt >= A && lt < B) { phase = 'warn'; x += Math.sin(lt * 90) * 0.03; }
+      else if (lt >= B && lt < C) { phase = 'slam'; const k = (lt - B) / (C - B); y = map.stamperUpY + (map.stamperDownY - map.stamperUpY) * k * k; }
+      else if (lt >= C && lt < D) { phase = 'down'; y = map.stamperDownY; }
+      else if (lt >= D) { phase = 'rise'; const k = (lt - D) / (T - D); y = map.stamperDownY + (map.stamperUpY - map.stamperDownY) * k; }
+      if (phase === 'slam' && st.phase !== 'slam') st.hit.clear();
+      if (phase === 'down' && st.phase === 'slam') this.events.push({ type: 'stamp', pos: { x: st.x, y: 0.1, z: st.z } });
+      st.phase = phase;
+      st.body.setNextKinematicTranslation({ x, y, z: st.z });
+    }
+  }
+
+  /** Anyone (or anything) under a press as it slams gets blasted aside. */
+  private stamperHits() {
+    const map = INCINERATOR;
+    const h = map.stamperHead;
+    for (const st of this.stampers) {
+      if (st.phase !== 'slam' && st.phase !== 'down') continue;
+      const bottom = st.body.translation().y - h.y;
+      const under = (p: V3) => Math.abs(p.x - st.x) < h.x + 0.12 && Math.abs(p.z - st.z) < h.z + 0.12 && p.y < bottom + 0.35 && p.y > -0.4;
+      const away = (p: V3) => {
+        // Out the nearest side of the press (across the belt), plus up.
+        const dz = p.z - st.z;
+        const sz = Math.abs(dz) > 0.05 ? Math.sign(dz) : (this.rand() < 0.5 ? -1 : 1);
+        return { x: (p.x - st.x) * 1.5, z: sz };
+      };
+      for (const [id, r] of this.players) {
+        if (!r.active || st.hit.has(id)) continue;
+        const parts = [...r.parts.values()];
+        const caught = parts.find((pt) => under(pt.body.translation()));
+        if (!caught) continue;
+        st.hit.add(id);
+        const p = r.chest.translation();
+        const d = away(p);
+        const l = Math.hypot(d.x, d.z) || 1;
+        for (const pt of parts) {
+          const m = pt.body.mass();
+          pt.body.applyImpulse({ x: (d.x / l) * tuning.stamperPush * m, y: 3 * m, z: (d.z / l) * tuning.stamperPush * m }, true);
+        }
+        r.addStun(2);
+        this.addKo(id, tuning.stamperKo);
+        this.events.push({
+          type: 'hit', player: id, cause: 'stamp', pos: { ...caught.body.translation() }, strength: 40,
+          entity: this.entityOfBody.get(caught.body.handle) ?? -1, local: { x: 0, y: 0.05, z: 0 }, dir: { x: 0, y: 1, z: 0 },
+        });
+      }
+      for (const b of [...this.loose.filter((g) => g.active).map((g) => g.body), ...this.beltCrates.filter((c) => c.active).map((c) => c.body), ...this.props.map((p) => p.body)]) {
+        if (st.hit.has(-1 - b.handle) || !under(b.translation())) continue;
+        st.hit.add(-1 - b.handle);
+        const d = away(b.translation());
+        const l = Math.hypot(d.x, d.z) || 1;
+        b.applyImpulse({ x: (d.x / l) * 5 * b.mass(), y: 3 * b.mass(), z: (d.z / l) * 5 * b.mass() }, true);
+      }
+    }
+  }
+
+  private buildStampers() {
+    const map = INCINERATOR;
+    const h = map.stamperHead;
+    for (const s of map.stampers) {
+      const body = this.world.createRigidBody(
+        this.R.RigidBodyDesc.kinematicPositionBased().setTranslation(s.x, map.stamperUpY, s.z),
+      );
+      this.world.createCollider(
+        this.R.ColliderDesc.cuboid(h.x, h.y, h.z).setFriction(0.8).setCollisionGroups(groups(WORLD_GROUP, 0xffff)),
+        body,
+      );
+      this.stampers.push({ body, x: s.x, z: s.z, offset: s.offset, phase: 'up', hit: new Set() });
+      this.addEntity(body, { kind: 'box', hx: h.x, hy: h.y, hz: h.z }, 0xe3b21b, 'prop', undefined, 'stamper');
+    }
+  }
+
   private updateHazards() {
     const map = INCINERATOR;
+    this.stamperHits();
     // Conveyors: whatever rests on a belt is dragged along it (toward the pit).
     const push = (b: RAPIER_NS.RigidBody) => {
       if (!b.isEnabled()) return;
@@ -1202,6 +1294,7 @@ export class Sim {
     const e = this.entities[this.entities.length - 1];
     if (opts.emissive) e.emissive = opts.emissive;
     if (opts.flow) e.flow = opts.flow;
+    if (opts.surface) e.surface = opts.surface;
   }
 
   private addCrate(pos: V3, size: number, color: number) {

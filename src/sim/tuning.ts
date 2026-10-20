@@ -106,6 +106,9 @@ export const tuning = {
   railBreakSpeed: 4.2, // something hitting the railing this fast breaks it
   railHp: 40, // knockback the railing soaks up from shots/punches before breaking
   gunEvery: 3.2, // average seconds between guns dropping onto a belt
+  stamperPeriod: 4.6, // seconds per press cycle (up, shudder, slam, hold, rise)
+  stamperPush: 7, // m/s sideways out from under the press
+  stamperKo: 55,
 
   // World.
   gravity: -18,

@@ -13,6 +13,7 @@ src/
   render/     Three.js scene; draws EntityDesc[] + a flat Float32Array of transforms
     effects.ts  Tracers, flashes, explosions, camera shake — driven only by SimEvents
     gore.ts     Blood fountains/splats + shell casings (pooled InstancedMeshes, client-only)
+    surfaces.ts Procedural canvas textures (concrete, brick, grate, metal, hazard) + boxes with world-scale UVs
     models.ts   Display models (guns, grenade, faces); collision still uses simple shapes
     body.ts     One-piece gummy character (bean torso+head, tapered limbs): smooth-union SDF of all parts, meshed once with marching cubes,
                 skinned to 11 bones that copy the physics bodies (one draw call, no seams)
@@ -81,6 +82,6 @@ npm run typecheck
 
 ## Rounds and hazards
 - `Sim.match` is a small state machine: practice | countdown | playing | roundOver | matchOver. `startMatch()` / `setPractice()`. Elimination (`eliminate`) parks the ragdoll out of the world (`Ragdoll.setActive(false)`); a new round `resetAll()`s everything and reactivates everyone.
-- Hazards live in `Sim.updateHazards` and read data from the map module: belt pushes (limp bodies, props, guns), gun + crate spawners on the belts, breakable rails (`contactPairsWith` speed check, or hit damage in `hitscan`; broken rails become dynamic and burn in the pit), the fire volume, and the pit flare cycle (`Sim.furnace`, broadcast as `furnace` events).
+- Hazards live in `Sim.updateHazards` and read data from the map module: belt pushes (limp bodies, props, guns), gun + crate spawners on the belts, breakable rails (`contactPairsWith` speed check, or hit damage in `hitscan`; broken rails become dynamic and burn in the pit), the fire volume, the pit flare cycle (`Sim.furnace`, broadcast as `furnace` events), and the stamping presses (kinematic bodies on a fixed cycle via `setNextKinematicTranslation`; hits applied while slamming).
 - `Ragdoll.surfaceVelocity` tells a character what moving surface is under them: planted feet ride along and walking is relative to it.
 - Match/round events (`countdown`, `roundStart`, `eliminated`, `roundOver`, `matchOver`) drive the HUD; they'll go over the reliable channel in multiplayer.

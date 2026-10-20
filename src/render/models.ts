@@ -2,6 +2,7 @@
 // shapes in sim/weapons.ts. Every gun model points down +Z with its center where the sim's box center is.
 import * as THREE from 'three';
 import type { EntityDesc, ModelKind } from '../sim/sim';
+import { surfaceMaterial, worldBox } from './surfaces';
 
 const mat = (color: number, opts: Partial<THREE.MeshStandardMaterialParameters> = {}) =>
   new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.2, ...opts });
@@ -204,6 +205,7 @@ export function buildModel(e: EntityDesc): THREE.Object3D {
     case 'grenadeLive': g = grenade(true); break;
     case 'belt': g = belt(s.kind === 'box' ? s : { hx: 1, hy: 0.2, hz: 3 }, e.flow ?? { x: 0, z: -1 }); break;
     case 'rail': g = railing(s.kind === 'box' ? s : { hx: 0.5, hy: 0.4, hz: 0.04 }); break;
+    case 'stamper': g = stamper(s.kind === 'box' ? s : { hx: 0.75, hy: 0.28, hz: 1.05 }); break;
     case 'head': g = head(s.kind === 'ball' ? s.r : 0.14, e.color); break;
     case 'torso': {
       // A round bean instead of a box, overlapping the hips so the body reads as one blob.
@@ -290,6 +292,21 @@ function belt(b: { hx: number; hy: number; hz: number }, flow: { x: number; z: n
   const side = new THREE.MeshStandardMaterial({ color: 0x1c1d20, roughness: 0.7, metalness: 0.4 });
   // Box faces: +x, -x, +y (top), -y, +z, -z.
   return new THREE.Mesh(new THREE.BoxGeometry(b.hx * 2, b.hy * 2, b.hz * 2), [side, side, top, side, side, side]);
+}
+
+/** Stamping press head in hazard stripes, with the piston rod running up into the gantry beam. */
+function stamper(b: { hx: number; hy: number; hz: number }) {
+  const g = new THREE.Group();
+  g.add(new THREE.Mesh(worldBox(b.hx, b.hy, b.hz, 'hazard'), surfaceMaterial('hazard', 0xffffff)));
+  // Heavy steel plate on the underside.
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(b.hx * 2 + 0.04, 0.08, b.hz * 2 + 0.04), DARK);
+  plate.position.y = -b.hy + 0.02;
+  g.add(plate);
+  // Piston rod: long enough to stay inside the beam at full extension.
+  const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 3.2, 14), GUNMETAL);
+  rod.position.y = b.hy + 1.6;
+  g.add(rod);
+  return g;
 }
 
 /** Pit railing section: two posts and two bars (the collider is a simple panel). */

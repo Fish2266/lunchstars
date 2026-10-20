@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import type { EntityDesc, ShapeDesc } from '../sim/sim';
 import { buildBody } from './body';
 import { buildFace, buildModel, gummy, type Face } from './models';
+import { surfaceMaterial, worldBox } from './surfaces';
 
 export class Renderer {
   readonly scene = new THREE.Scene();
@@ -47,16 +48,27 @@ export class Renderer {
     this.sun.shadow.normalBias = 0.02;
     this.scene.add(this.sun);
 
-    // Smoke banks far below, so the drop off the ledge reads as deep.
-    const smokeMat = new THREE.MeshLambertMaterial({ color: 0x45484f, transparent: true, opacity: 0.8 });
-    for (let i = 0; i < 40; i++) {
-      const c = new THREE.Mesh(new THREE.SphereGeometry(2 + Math.random() * 3, 10, 8), smokeMat);
-      const a = Math.random() * Math.PI * 2;
-      const d = 14 + Math.random() * 40;
-      c.position.set(Math.cos(a) * d, -12 - Math.random() * 10, Math.sin(a) * d);
-      c.scale.y = 0.5;
-      this.scene.add(c);
+    // Hanging factory lamps: warm pools of light over the floor (no shadows, to keep it cheap).
+    const shade = new THREE.MeshStandardMaterial({ color: 0x2f4a3a, roughness: 0.5, metalness: 0.4, side: THREE.DoubleSide });
+    const bulb = new THREE.MeshBasicMaterial({ color: 0xfff1c8 });
+    const cable = new THREE.MeshBasicMaterial({ color: 0x111111 });
+    for (const [x, z] of [[-4.6, 3.6], [4.6, 3.6], [-4.6, -4.2], [4.6, -4.2]]) {
+      const y = 6.2;
+      const lamp = new THREE.Group();
+      const c = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 6, 4), cable);
+      c.position.y = 3.2;
+      const sh = new THREE.Mesh(new THREE.ConeGeometry(0.42, 0.32, 18, 1, true), shade);
+      const b = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 8), bulb);
+      b.position.y = -0.12;
+      lamp.add(c, sh, b);
+      lamp.position.set(x, y, z);
+      this.scene.add(lamp);
+      const spot = new THREE.SpotLight(0xffd9a0, 55, 15, 0.75, 0.6, 1.4);
+      spot.position.set(x, y - 0.15, z);
+      spot.target.position.set(x, 0, z);
+      this.scene.add(spot, spot.target);
     }
+
     // Furnace glow: a warm light in the mouth that flickers, and flares before and during a burst.
     this.furnaceLight = new THREE.PointLight(0xff7a2a, 30, 16, 1.5);
     this.furnaceLight.position.set(0, 0.3, 0); // just above the fire pit
@@ -103,7 +115,10 @@ export class Renderer {
         this.scene.add(model);
         return model;
       }
-      const mesh = new THREE.Mesh(geometryFor(e.shape), materialFor(e));
+      // Textured level pieces get world-scale UVs; everything else the plain shape.
+      const mesh = e.surface && e.shape.kind === 'box'
+        ? new THREE.Mesh(worldBox(e.shape.hx, e.shape.hy, e.shape.hz, e.surface), surfaceMaterial(e.surface, e.color, e.emissive ?? 0))
+        : new THREE.Mesh(geometryFor(e.shape), materialFor(e));
       mesh.castShadow = e.role !== 'static' || e.shape.kind !== 'box' || (e.shape as { hy: number }).hy > 0.05;
       mesh.receiveShadow = true;
       if (e.role === 'static') mesh.matrixAutoUpdate = true;

@@ -73,7 +73,9 @@ A factory floor around a central fire pit.
 - Three floor-flush conveyor belts (left, right, back) run into the pit at 1.6 m/s. You can walk on them (walking is relative to the belt) and step off; limp bodies, crates and guns get carried in.
 - Guns only arrive on the belts (every ~3 s: 50% pistol, 30% shotgun, 20% grenade), riding toward the fire — grab one before it goes in.
 - Pit flare (survivable hazard): every 11 s it glows/embers for 1.4 s, then erupts — blasts anyone near the rim up and outward, +40 KO.
-- Raised platforms with ramps in the back corners, a tall back wall with pipes, waist-high walls elsewhere (over them = fall).
+- Raised platforms in the back corners, reached by solid ramps (with a curb), joined by a catwalk bridge over the back belt.
+- Stamping presses over the left and right belts: they shudder, slam onto the belt, hold, rise (4.6 s cycle, out of phase). Anyone underneath is blasted aside (+55 KO, blood); guns and crates get knocked off the belt. Guns ride under them on the way to the pit.
+- Look: tiled concrete floor, brick back wall, metal grating, brushed-metal walls, hazard-striped press heads (procedural textures at world scale); hanging factory lamps with warm spotlights. Nothing outside the walls but darkness.
 - Rounds: 3-2-1 countdown, last one standing, first to 3, rematch with Jump. KO escalation resets each round. Practice mode in the panel.
 - Carrying: anything you hold (a KO'd player, a crate) is partly lifted and pulled along with you.
 - Bot: grabs guns off the belts, avoids the pit and edges, and drags KO'd players onto the nearest belt (works reliably now that belts are flush).
@@ -85,3 +87,4 @@ A factory floor around a central fire pit.
 - Slight residual wobble (~5°) after recovering from a knockdown.
 - Aiming arms sway ±8° for ~0.7 s after a fast flick (cosmetic: shots use the crosshair aim, not the arm).
 - Weapon sliders aren't saved to localStorage yet (only `tuning` is).
+- Bot on the Incinerator: sometimes falls in chasing belt guns, and can go long stretches without finishing off an idle opponent.

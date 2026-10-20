@@ -126,7 +126,7 @@ export class Gore {
   wound(e: Extract<SimEvent, { type: 'hit' }>, transforms: Float32Array) {
     // Only guns and explosions bleed; punches and bonks don't.
     if (goreSettings.mode === 'off' || e.entity < 0) return;
-    if (e.cause !== 'shot' && e.cause !== 'pellet' && e.cause !== 'blast') return;
+    if (e.cause !== 'shot' && e.cause !== 'pellet' && e.cause !== 'blast' && e.cause !== 'stamp') return;
     const o = e.entity * 7;
     _q.set(transforms[o + 3], transforms[o + 4], transforms[o + 5], transforms[o + 6]);
     const power = THREE.MathUtils.clamp(e.strength / 14, 0.5, 3) * goreSettings.amount;

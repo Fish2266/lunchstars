@@ -20,8 +20,11 @@ import type { V3 } from './sim';
 
 export interface Box3 { min: V3; max: V3 }
 
+/** Procedural surface textures the renderer can tile at world scale. */
+export type Surface = 'concrete' | 'brick' | 'grate' | 'metal';
+
 export interface ArenaBuilder {
-  box(pos: V3, half: V3, color: number, opts?: { rotY?: number; rotX?: number; emissive?: number; flow?: { x: number; z: number }; friction?: number }): void;
+  box(pos: V3, half: V3, color: number, opts?: { rotY?: number; rotX?: number; emissive?: number; flow?: { x: number; z: number }; friction?: number; surface?: Surface }): void;
   crate(pos: V3, size: number, color: number): void;
   /** A breakable railing section: solid until a hard hit, then it falls loose. */
   rail(pos: V3, half: V3, color: number): void;
@@ -63,6 +66,17 @@ export const INCINERATOR = {
   flare: { min: { x: -3.4, y: -0.6, z: -3.4 }, max: { x: 3.4, y: 3.2, z: 3.4 } } as Box3,
   pitCenter: { x: 0, y: 0, z: 0 } as V3,
   pitHalf: PIT,
+  /**
+   * Stamping presses over the side belts. The head (half size below) rises to `upY`, shudders, slams to
+   * `downY`, holds, and rises again; `offset` staggers them so they don't slam together.
+   */
+  stampers: [
+    { x: -5.4, z: 0, offset: 0 },
+    { x: 5.4, z: 0, offset: 0.5 },
+  ],
+  stamperHead: { x: 0.75, y: 0.28, z: 1.05 } as V3,
+  stamperUpY: 2.75,
+  stamperDownY: 0.31,
 };
 
 const C = {
@@ -84,10 +98,11 @@ const C = {
 
 export function buildIncinerator(b: ArenaBuilder) {
   // ---------------------------------------------------------------- floor with a hole in the middle
-  b.box({ x: 0, y: -0.5, z: 4.5 }, { x: 9, y: 0.5, z: 2.5 }, C.floor); // front (z 2..7)
-  b.box({ x: 0, y: -0.5, z: -5 }, { x: 9, y: 0.5, z: 3 }, C.floor); // back (z -8..-2)
-  b.box({ x: -5.5, y: -0.5, z: 0 }, { x: 3.5, y: 0.5, z: PIT }, C.floor); // left
-  b.box({ x: 5.5, y: -0.5, z: 0 }, { x: 3.5, y: 0.5, z: PIT }, C.floor); // right
+  const concrete = { surface: 'concrete' as Surface };
+  b.box({ x: 0, y: -0.5, z: 4.5 }, { x: 9, y: 0.5, z: 2.5 }, C.floor, concrete); // front (z 2..7)
+  b.box({ x: 0, y: -0.5, z: -5 }, { x: 9, y: 0.5, z: 3 }, C.floor, concrete); // back (z -8..-2)
+  b.box({ x: -5.5, y: -0.5, z: 0 }, { x: 3.5, y: 0.5, z: PIT }, C.floor, concrete); // left
+  b.box({ x: 5.5, y: -0.5, z: 0 }, { x: 3.5, y: 0.5, z: PIT }, C.floor, concrete); // right
   // Hazard stripes around the rim.
   for (const [x, z, hx, hz] of [[0, 2.3, 2.6, 0.18], [0, -2.3, 2.6, 0.18], [-2.3, 0, 0.18, 2.6], [2.3, 0, 0.18, 2.6]]) {
     b.box({ x, y: 0.005, z }, { x: hx, y: 0.008, z: hz }, C.stripe);
@@ -126,11 +141,12 @@ export function buildIncinerator(b: ArenaBuilder) {
   b.box({ x: 0, y: 1.4, z: -7.9 }, { x: 1.15, y: 0.5, z: 0.15 }, C.iron);
 
   // ---------------------------------------------------------------- walls
-  b.box({ x: 0, y: 2.5, z: -8.25 }, { x: 9.2, y: 2.5, z: 0.25 }, C.wall); // back (tall)
+  b.box({ x: 0, y: 2.5, z: -8.25 }, { x: 9.2, y: 2.5, z: 0.25 }, C.wall, { surface: 'brick' }); // back (tall)
   const ph = 0.4;
-  b.box({ x: 0, y: ph, z: 7.1 }, { x: 9.2, y: ph, z: 0.1 }, C.parapet); // front
-  b.box({ x: -9.1, y: ph, z: -0.6 }, { x: 0.1, y: ph, z: 7.6 }, C.parapet); // left
-  b.box({ x: 9.1, y: ph, z: -0.6 }, { x: 0.1, y: ph, z: 7.6 }, C.parapet); // right
+  const metal = { surface: 'metal' as Surface };
+  b.box({ x: 0, y: ph, z: 7.1 }, { x: 9.2, y: ph, z: 0.1 }, C.parapet, metal); // front
+  b.box({ x: -9.1, y: ph, z: -0.6 }, { x: 0.1, y: ph, z: 7.6 }, C.parapet, metal); // left
+  b.box({ x: 9.1, y: ph, z: -0.6 }, { x: 0.1, y: ph, z: 7.6 }, C.parapet, metal); // right
   for (const [x, z, hx, hz] of [[0, 7.1, 9.2, 0.13], [-9.1, -0.6, 0.13, 7.6], [9.1, -0.6, 0.13, 7.6]]) {
     b.box({ x, y: ph * 2 + 0.03, z }, { x: hx, y: 0.03, z: hz }, C.stripe);
   }
@@ -140,11 +156,30 @@ export function buildIncinerator(b: ArenaBuilder) {
   for (const x of [-6, -3, 3, 6]) b.box({ x, y: 2.2, z: -7.85 }, { x: 0.14, y: 2, z: 0.14 }, C.pipeA);
 
   // ---------------------------------------------------------------- raised platforms (back corners) with ramps
+  const grate = { surface: 'grate' as Surface };
   for (const s of [-1, 1]) {
-    b.box({ x: s * 6.6, y: 1.7, z: -6.6 }, { x: 2.4, y: 0.1, z: 1.4 }, C.grate);
+    b.box({ x: s * 6.6, y: 1.7, z: -6.6 }, { x: 2.4, y: 0.1, z: 1.4 }, C.grate, grate);
     for (const [px, pz] of [[s * 4.4, -5.4], [s * 4.4, -7.8]]) b.box({ x: px, y: 0.8, z: pz }, { x: 0.1, y: 0.8, z: 0.1 }, C.iron);
-    // Ramp down the side wall toward the front (high end at the platform).
-    b.box({ x: s * 8.1, y: 0.86, z: -3.3 }, { x: 0.7, y: 0.08, z: 2.1 }, C.grate, { rotX: 0.44 });
+    // Ramp down the side wall toward the front (high end at the platform). It's a thick slab sunk into the
+    // floor, so its top is the slope and there's no gap underneath to wander into.
+    const th = 0.75, ang = 0.44, sink = th - 0.08;
+    b.box({ x: s * 7.8, y: 0.86 - sink * Math.cos(ang), z: -3.3 - sink * Math.sin(ang) }, { x: 1.2, y: th, z: 2.1 }, C.grate, { rotX: ang, surface: 'grate' });
+    // Low curb along the open side so you don't slide off while climbing.
+    // (Offsets along the slab's own up axis: Rx(ang) maps local +y to (0, cos, sin).)
+    const lift = 0.08 + 0.2; // ramp top + half curb height
+    b.box({ x: s * 6.62, y: 0.86 + lift * Math.cos(ang), z: -3.3 + lift * Math.sin(ang) }, { x: 0.05, y: 0.2, z: 2.1 }, C.stripe, { rotX: ang });
+  }
+  // Catwalk bridge joining the two platforms over the back belt (no rail on the belt side: easy to fall off).
+  b.box({ x: 0, y: 1.7, z: -7.0 }, { x: 4.25, y: 0.08, z: 0.6 }, C.grate, grate);
+  for (const x of [-1.6, 1.6]) b.box({ x, y: 0.8, z: -7.45 }, { x: 0.08, y: 0.82, z: 0.08 }, C.iron);
+
+  // ---------------------------------------------------------------- stamping presses over the side belts
+  for (const st of INCINERATOR.stampers) {
+    // Gantry: two legs either side of the belt and a beam across the top.
+    for (const z of [-1.45, 1.45]) b.box({ x: st.x, y: 1.85, z }, { x: 0.14, y: 1.85, z: 0.14 }, C.iron, metal);
+    b.box({ x: st.x, y: 3.78, z: 0 }, { x: 0.3, y: 0.16, z: 1.6 }, C.rust, metal);
+    // Warning stripes on the belt under the press.
+    b.box({ x: st.x, y: 0.016, z: 0 }, { x: 0.82, y: 0.004, z: 1.0 }, C.stripe, { emissive: 0.15 });
   }
 
   // ---------------------------------------------------------------- hood above the pit (scenery)

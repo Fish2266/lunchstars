@@ -134,6 +134,13 @@ export class Bot {
     return best;
   }
 
+  /** Under a press that's about to (or is) slamming down. */
+  private underPress(p: XZ) {
+    const h = INCINERATOR.stamperHead;
+    return this.sim.stampers.some((st) => st.phase !== 'up' && st.phase !== 'rise'
+      && Math.abs(p.x - st.x) < h.x + 0.5 && Math.abs(p.z - st.z) < h.z + 0.5);
+  }
+
   private nearPit(p: XZ, margin: number) {
     const c = INCINERATOR.pitCenter, h = INCINERATOR.pitHalf + margin;
     return Math.abs(p.x - c.x) < h && Math.abs(p.z - c.z) < h;
@@ -164,6 +171,7 @@ export class Bot {
     mx /= l; mz /= l;
     const bad = (px: number, pz: number) =>
       this.nearPit({ x: px, z: pz }, 0.55)
+      || this.underPress({ x: px, z: pz })
       || (!allowBelt && !!this.onBelt({ x: px, z: pz }))
       || Math.abs(px) > 8.5 || pz > 6.6 || pz < -7.6;
     if (bad(a.x + mx * 0.8, a.z + mz * 0.8)) {

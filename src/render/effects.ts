@@ -67,6 +67,14 @@ export class Effects {
         // Spent guns lie there smoking until they vanish, so it's obvious they're empty.
         if (e.empty && e.entity >= 0) this.smokers.push({ entity: e.entity, t: 0, acc: 0 });
         break;
+      case 'stamp':
+        // Dust and a thump when a press hits the belt.
+        for (let i = 0; i < 6; i++) {
+          const ang = (i / 6) * Math.PI * 2;
+          this.smokePuff({ x: e.pos.x + Math.cos(ang) * 0.9, y: e.pos.y, z: e.pos.z + Math.sin(ang) * 1.1 }, 0.18, 0.9);
+        }
+        this.shake = Math.max(this.shake, 0.3);
+        break;
       case 'railBreak':
         this.puff(e.pos, 0.35, 0xffe08a, 0.18);
         this.shake = Math.max(this.shake, 0.2);
