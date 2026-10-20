@@ -202,6 +202,7 @@ export function buildModel(e: EntityDesc): THREE.Object3D {
     case 'shotgun': g = shotgun(); break;
     case 'grenade': g = grenade(false); break;
     case 'grenadeLive': g = grenade(true); break;
+    case 'belt': g = belt(s.kind === 'box' ? s : { hx: 1, hy: 0.2, hz: 3 }); break;
     case 'head': g = head(s.kind === 'ball' ? s.r : 0.14, e.color); break;
     case 'torso': {
       // A round bean instead of a box, overlapping the hips so the body reads as one blob.
@@ -244,7 +245,42 @@ export function buildModel(e: EntityDesc): THREE.Object3D {
   return g;
 }
 
-/** Per-frame model animation (blinking live grenades). */
+// ------------------------------------------------------------------ conveyor belt
+
+/** Rubber belt with yellow chevrons, drawn once to a canvas; its offset scrolls to show the belt moving. */
+const BELT_TEX = (() => {
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 64;
+  const x = c.getContext('2d')!;
+  x.fillStyle = '#26272b'; x.fillRect(0, 0, 64, 64);
+  x.strokeStyle = '#3a3b40'; x.lineWidth = 2;
+  for (let i = 0; i < 64; i += 8) { x.beginPath(); x.moveTo(0, i); x.lineTo(64, i); x.stroke(); }
+  x.strokeStyle = '#e3b21b'; x.lineWidth = 7;
+  x.beginPath(); x.moveTo(6, 44); x.lineTo(32, 18); x.lineTo(58, 44); x.stroke();
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+})();
+let beltSpeed = 1.5;
+export function setBeltSpeed(v: number) { beltSpeed = v; }
+
+function belt(b: { hx: number; hy: number; hz: number }) {
+  const tex = BELT_TEX.clone();
+  tex.repeat.set(1, (b.hz * 2) / (b.hx * 2));
+  tex.needsUpdate = true;
+  const top = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.8 });
+  const side = new THREE.MeshStandardMaterial({ color: 0x1c1d20, roughness: 0.7, metalness: 0.4 });
+  // Box faces: +x, -x, +y (top), -y, +z, -z.
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.hx * 2, b.hy * 2, b.hz * 2), [side, side, top, side, side, side]);
+  beltTextures.push({ tex, length: b.hz * 2 });
+  return mesh;
+}
+const beltTextures: { tex: THREE.Texture; length: number }[] = [];
+
+/** Per-frame model animation (blinking live grenades, moving belts). */
 export function animateModels(time: number) {
   LIVE_GRENADE.emissiveIntensity = Math.sin(time * 18) > 0 ? 1.4 : 0;
+  // The belt moves toward -z: on the box's top face, v runs along +z... so scroll v forward.
+  for (const b of beltTextures) b.tex.offset.y = ((time * beltSpeed) / b.length) * b.tex.repeat.y;
 }

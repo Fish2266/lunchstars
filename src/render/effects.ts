@@ -57,13 +57,50 @@ export class Effects {
         this.explosion(e.pos, e.radius);
         this.shake = Math.max(this.shake, 0.7);
         break;
+      case 'burn':
+        this.fireBall(e.pos, 0.6);
+        break;
+      case 'eliminated':
+        if (e.cause === 'fire') { this.fireBall(e.pos, 1.4); this.shake = Math.max(this.shake, 0.5); }
+        break;
+      case 'drop':
+        // Spent guns lie there smoking until they vanish, so it's obvious they're empty.
+        if (e.empty && e.entity >= 0) this.smokers.push({ entity: e.entity, t: 0, acc: 0 });
+        break;
       case 'pickup':
         this.puff({ x: e.pos.x, y: e.pos.y + 1.0, z: e.pos.z }, 0.5, 0xfff7a8, 0.25);
         break;
     }
   }
 
-  update(dt: number) {
+  private smokers: { entity: number; t: number; acc: number }[] = [];
+  private smokeMat = new THREE.MeshLambertMaterial({ color: 0x8a8a8a, transparent: true, depthWrite: false });
+  private jetAcc = 0;
+
+  /**
+   * Per frame. `transforms` lets smoke follow the spent gun it rises from; `furnace` drives the flame jet.
+   */
+  update(dt: number, transforms?: Float32Array, furnace?: { state: string; mouth: V3 }) {
+    if (transforms) {
+      for (let i = this.smokers.length - 1; i >= 0; i--) {
+        const s = this.smokers[i];
+        s.t += dt;
+        const o = s.entity * 7;
+        if (s.t > 6 || transforms[o + 1] < -500) { this.smokers.splice(i, 1); continue; }
+        s.acc += dt * 9;
+        while (s.acc >= 1) {
+          s.acc -= 1;
+          this.smokePuff({ x: transforms[o] + (Math.random() - 0.5) * 0.08, y: transforms[o + 1] + 0.05, z: transforms[o + 2] + (Math.random() - 0.5) * 0.08 }, 0.07, 1.4);
+        }
+      }
+    }
+    if (furnace && furnace.state === 'burst') {
+      this.jetAcc += dt * 70;
+      while (this.jetAcc >= 1) {
+        this.jetAcc -= 1;
+        this.flameBlob(furnace.mouth);
+      }
+    }
     this.time += dt;
     for (const l of this.lights) {
       const t = l.until > l.start ? (this.time - l.start) / (l.until - l.start) : 1;
@@ -109,6 +146,53 @@ export class Effects {
   private flash(p: V3, intensity: number) {
     this.pulseLight(p, 0xffd27a, 8 * intensity, 4, 0.06);
     this.puff(p, 0.09 * intensity, 0xffe08a, 0.05);
+  }
+
+  /** A grey puff that rises, grows and fades. */
+  private smokePuff(p: V3, size: number, life: number) {
+    const mat = this.smokeMat.clone();
+    const m = new THREE.Mesh(this.puffGeo, mat);
+    const drift = { x: (Math.random() - 0.5) * 0.15, z: (Math.random() - 0.5) * 0.15 };
+    this.add(m, life, (t) => {
+      m.position.set(p.x + drift.x * t, p.y + t * 0.8, p.z + drift.z * t);
+      m.scale.setScalar(size * (0.6 + t * 2.2));
+      mat.opacity = 0.55 * (1 - t) * Math.min(1, t * 8);
+    });
+  }
+
+  /** One blob of the furnace's flame jet, shooting out of the mouth along +z. */
+  private flameBlob(mouth: V3) {
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffb040, transparent: true, depthWrite: false });
+    const m = new THREE.Mesh(this.puffGeo, mat);
+    const vx = (Math.random() - 0.5) * 1.6, vy = 0.6 + Math.random() * 1.6, vz = 5 + Math.random() * 3;
+    const start = { x: mouth.x + (Math.random() - 0.5) * 2, y: mouth.y + (Math.random() - 0.5) * 1.2, z: mouth.z };
+    const life = 0.5 + Math.random() * 0.25;
+    this.add(m, life, (t) => {
+      const s = t * life;
+      m.position.set(start.x + vx * s, start.y + vy * s, start.z + vz * s);
+      m.scale.setScalar(0.2 + t * 0.6);
+      mat.color.setHSL(0.1 - 0.08 * t, 1, 0.6 - 0.25 * t);
+      mat.opacity = 0.9 * (1 - t);
+    });
+  }
+
+  /** Something hit the fire: a bloom of flame and a smoke plume. */
+  private fireBall(p: V3, size: number) {
+    this.pulseLight(p, 0xff8030, 30 * size, 6, 0.4);
+    for (let i = 0; i < 10 * size; i++) {
+      const mat = new THREE.MeshBasicMaterial({ color: 0xffa040, transparent: true, depthWrite: false });
+      const m = new THREE.Mesh(this.puffGeo, mat);
+      const v = { x: (Math.random() - 0.5) * 2, y: 1.5 + Math.random() * 2.5, z: (Math.random() - 0.5) * 2 + 1 };
+      const life = 0.5 + Math.random() * 0.4;
+      this.add(m, life, (t) => {
+        const s = t * life;
+        m.position.set(p.x + v.x * s, p.y + v.y * s, p.z + v.z * s);
+        m.scale.setScalar(size * (0.15 + t * 0.35));
+        mat.color.setHSL(0.09 - 0.07 * t, 1, 0.6 - 0.3 * t);
+        mat.opacity = 0.95 * (1 - t);
+      });
+    }
+    for (let i = 0; i < 4 * size; i++) this.smokePuff({ x: p.x, y: p.y + 0.5, z: p.z + 0.4 }, 0.25 * size, 1.6);
   }
 
   private explosion(p: V3, radius: number) {

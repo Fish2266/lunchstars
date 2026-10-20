@@ -6,6 +6,7 @@ import { emptyInput, type PlayerInput } from './input';
 import { Ragdoll, worldToLocal, type ArmMode } from './ragdoll';
 import { tuning } from './tuning';
 import { explosive, handling, PICKUP_RESPAWN, punch, WEAPON_KINDS, weapons, type WeaponKind } from './weapons';
+import { buildIncinerator, inBox, INCINERATOR, type ArenaBuilder } from './incinerator';
 
 export const TICK_RATE = 60;
 export const DT = 1 / TICK_RATE;
@@ -25,12 +26,16 @@ export interface EntityDesc {
   playerId?: number;
   /** Render a detailed model instead of the plain collision shape. */
   model?: ModelKind;
+  /** Glow strength for static level pieces (furnace fire). */
+  emissive?: number;
 }
 
-export type ModelKind = WeaponKind | 'grenadeLive' | 'head' | 'torso' | 'hips' | 'limb' | 'forearm' | 'shin';
+export type ModelKind = WeaponKind | 'grenadeLive' | 'head' | 'torso' | 'hips' | 'limb' | 'forearm' | 'shin' | 'belt';
 
 export type V3 = { x: number; y: number; z: number };
-export type HitCause = 'punch' | 'shot' | 'pellet' | 'blast' | 'bonk' | 'shove';
+export type HitCause = 'punch' | 'shot' | 'pellet' | 'blast' | 'bonk' | 'shove' | 'flame';
+export type FurnaceState = 'idle' | 'warn' | 'burst';
+export type MatchPhase = 'practice' | 'countdown' | 'playing' | 'roundOver' | 'matchOver';
 type Q = { x: number; y: number; z: number; w: number };
 
 /** Things the client turns into effects (and, in multiplayer, reliable events). Drain with `drainEvents()`. */
@@ -43,7 +48,15 @@ export type SimEvent =
   | { type: 'hit'; player: number; by?: number; cause: HitCause; pos: V3; strength: number; entity: number; local: V3; dir: V3 }
   | { type: 'ko'; player: number; seconds: number }
   | { type: 'wake'; player: number }
-  | { type: 'drop'; player: number; weapon: WeaponKind; thrown: boolean }
+  /** `entity` is the loose gun's entity; `empty` guns smoke until they vanish. */
+  | { type: 'drop'; player: number; weapon: WeaponKind; thrown: boolean; entity: number; empty: boolean }
+  | { type: 'eliminated'; player: number; cause: 'fall' | 'fire'; pos: V3 }
+  | { type: 'burn'; pos: V3 }
+  | { type: 'furnace'; state: FurnaceState }
+  | { type: 'countdown'; round: number }
+  | { type: 'roundStart'; round: number }
+  | { type: 'roundOver'; round: number; winner: number | null }
+  | { type: 'matchOver'; winner: number }
   | { type: 'pickup'; player: number; weapon: WeaponKind; pos: V3 }
   | { type: 'empty'; player: number };
 
@@ -176,6 +189,21 @@ export class Sim {
   private pickups: PickupSpot[] = [];
   private grenades: Grenade[] = [];
   private loose: LooseGun[] = [];
+  /** Crates that come out onto the conveyor and ride into the furnace. */
+  private beltCrates: { body: RAPIER_NS.RigidBody; active: boolean }[] = [];
+  private beltTimer = 2;
+  readonly furnace = { state: 'idle' as FurnaceState, timer: 8, hit: new Set<number>() };
+  /** Rounds: last one standing wins, first to `winsToWin` wins the match. 'practice' = respawn, no rounds. */
+  readonly match = {
+    phase: 'practice' as MatchPhase,
+    timer: 0,
+    round: 0,
+    winsToWin: 3,
+    wins: new Map<number, number>(),
+    alive: new Set<number>(),
+    roundWinner: null as number | null,
+    matchWinner: null as number | null,
+  };
   /** Entity index for each rigid body handle (for pinning blood to body parts). */
   private entityOfBody = new Map<number, number>();
   private events: SimEvent[] = [];
@@ -192,6 +220,7 @@ export class Sim {
     this.buildArena();
     this.buildGrenadePool();
     this.buildLoosePool();
+    this.buildBeltCrates();
   }
 
   addPlayer(id: number): Ragdoll {
@@ -221,6 +250,13 @@ export class Sim {
       hitAccum: 0, hitDir: { x: 0, y: 0, z: 0 }, slot,
       ko: 0, sinceHit: 99, koTimer: 0, koCount: 0, hitsTaken: 0, mashPrev: false,
     });
+    // Standing on the conveyor carries your planted feet along.
+    r.surfaceVelocity = (p) => {
+      const b = INCINERATOR.belt;
+      return p.x > b.min.x && p.x < b.max.x && p.z > b.min.z && p.z < b.max.z && p.y > 0.12 && p.y < 0.6
+        ? { x: 0, z: -INCINERATOR.beltSpeed } : null;
+    };
+    if (this.match.phase !== 'practice') this.match.alive.add(id);
     // Reaching hands pick guns up instead of latching onto them.
     r.ignoreGrab = (c) => this.loose.some((g) => g.active && g.collider.handle === c.handle);
     return r;
@@ -243,7 +279,7 @@ export class Sim {
     const slot = this.fighters.get(id)!.slot;
     const s = this.spawns[slot % this.spawns.length];
     for (const other of this.players.values()) for (const b of r.bodyHandles) other.releaseIfAttachedTo(b);
-    r.teleport({ x: s.x, y: s.y + tuning.standHeight + 0.3, z: s.z });
+    r.teleport({ x: s.x, y: s.y + tuning.standHeight + 0.3, z: s.z }, Math.atan2(-s.x, -s.z));
     this.giveWeapon(id, null, 0);
     this.giveWeapon(id, null, 1);
     const f = this.fighters.get(id)!;
@@ -257,26 +293,35 @@ export class Sim {
     for (const p of this.pickups) p.respawn = 0;
     for (const g of this.grenades) this.deactivateGrenade(g);
     for (const g of this.loose) this.deactivateLoose(g);
+    for (const c of this.beltCrates) this.deactivateBeltCrate(c);
+    this.beltTimer = 2;
+    this.furnace.state = 'idle';
+    this.furnace.timer = 8;
   }
 
   step(inputs: ReadonlyMap<number, PlayerInput>) {
     this.world.gravity = { x: 0, y: tuning.gravity, z: 0 };
+    const m = this.match;
     for (const [id, r] of this.players) {
+      if (!r.active) continue;
       const raw = inputs.get(id) ?? emptyInput();
       const f = this.fighters.get(id)!;
       this.updateKnockout(id, r, f, raw);
-      // Knocked out: no control at all (the body still faces where it was).
-      const input = f.koTimer > 0 ? { ...emptyInput(), aimYaw: r.yaw } : raw;
+      // Knocked out: no control at all. Countdown: look around, but stay put.
+      const input = f.koTimer > 0 ? { ...emptyInput(), aimYaw: r.yaw }
+        : m.phase === 'countdown' ? { ...emptyInput(), aimYaw: raw.aimYaw, aimPitch: raw.aimPitch } : raw;
       this.updateHands(id, r, f, input);
       r.step(input, DT);
       this.updateFire(id, r, f, input);
     }
+    this.updateCarry();
     this.world.step();
     this.tick++;
 
     this.updateGrenades();
     this.updateLoose();
     this.updatePickups();
+    this.updateHazards();
     // Big hits knock items out of your hands.
     for (const [id, f] of this.fighters) {
       if (f.hitAccum >= handling.dropThreshold) {
@@ -287,9 +332,217 @@ export class Sim {
     }
     this.updateHeldModels(inputs);
 
-    // Falling out of the world. (Phase 4 turns this into elimination.)
-    for (const [id, r] of this.players) if (r.pelvis.translation().y < tuning.killY) this.respawn(id);
+    // Falling out of the world.
+    for (const [id, r] of this.players) if (r.active && r.pelvis.translation().y < tuning.killY) this.eliminate(id, 'fall');
     for (const p of this.props) if (p.body.translation().y < tuning.killY) this.resetProp(p);
+    this.updateMatch();
+  }
+
+  // ---------------------------------------------------------------- rounds
+
+  /** Start a best-of match from round 1. */
+  startMatch() {
+    this.match.wins.clear();
+    for (const id of this.players.keys()) this.match.wins.set(id, 0);
+    this.match.round = 0;
+    this.match.matchWinner = null;
+    this.startRound();
+  }
+
+  /** Sandbox mode: no rounds, falling or burning just respawns you. */
+  setPractice() {
+    this.match.phase = 'practice';
+    this.resetAll();
+  }
+
+  private startRound() {
+    const m = this.match;
+    m.round++;
+    m.roundWinner = null;
+    this.resetAll();
+    m.alive = new Set(this.players.keys());
+    m.phase = 'countdown';
+    m.timer = 3;
+    this.events.push({ type: 'countdown', round: m.round });
+  }
+
+  private updateMatch() {
+    const m = this.match;
+    if (m.phase === 'practice') return;
+    m.timer -= DT;
+    if (m.phase === 'countdown' && m.timer <= 0) {
+      m.phase = 'playing';
+      this.events.push({ type: 'roundStart', round: m.round });
+    } else if (m.phase === 'playing' && this.players.size >= 2 && m.alive.size <= 1) {
+      const winner = m.alive.size === 1 ? [...m.alive][0] : null;
+      m.roundWinner = winner;
+      if (winner !== null) m.wins.set(winner, (m.wins.get(winner) ?? 0) + 1);
+      m.phase = 'roundOver';
+      m.timer = 3.5;
+      this.events.push({ type: 'roundOver', round: m.round, winner });
+    } else if (m.phase === 'roundOver' && m.timer <= 0) {
+      const w = m.roundWinner;
+      if (w !== null && (m.wins.get(w) ?? 0) >= m.winsToWin) {
+        m.phase = 'matchOver';
+        m.matchWinner = w;
+        m.timer = 12;
+        this.events.push({ type: 'matchOver', winner: w });
+      } else {
+        this.startRound();
+      }
+    } else if (m.phase === 'matchOver' && m.timer <= 0) {
+      this.startMatch();
+    }
+  }
+
+  /** Out for the rest of the round (or respawn, in practice). */
+  eliminate(id: number, cause: 'fall' | 'fire') {
+    const r = this.players.get(id);
+    if (!r || !r.active) return;
+    const pos = { ...r.chest.translation() };
+    this.events.push({ type: 'eliminated', player: id, cause, pos });
+    if (this.match.phase === 'practice') { this.respawn(id); return; }
+    if (!this.match.alive.has(id)) return;
+    this.match.alive.delete(id);
+    for (const i of [0, 1] as const) this.dropItem(id, i, { x: 0, y: 1, z: 0 });
+    for (const other of this.players.values()) for (const b of r.bodyHandles) other.releaseIfAttachedTo(b);
+    const f = this.fighters.get(id)!;
+    f.koTimer = 0;
+    r.knockedOut = false;
+    r.setActive(false);
+  }
+
+  /**
+   * Carrying: whatever your hands are holding (a limp player, a crate) is partly lifted and pulled along with
+   * you, so you can drag someone to the furnace instead of fighting the floor's friction.
+   */
+  private updateCarry() {
+    for (const [, r] of this.players) {
+      if (!r.active || r.stiffness < 0.35) continue;
+      const held = r.hands.filter((h) => h.joint).map((h) => h.joint!.body2());
+      if (held.length === 0) continue;
+      const cv = r.chest.linvel();
+      const share = held.length / 2; // one hand helps half as much as two
+      const bodies = new Set<RAPIER_NS.RigidBody>();
+      for (const b of held) {
+        const owner = [...this.players.values()].find((p) => p !== r && p.bodyHandles.has(b.handle));
+        if (owner) for (const p of owner.parts.values()) bodies.add(p.body);
+        else if (b.isDynamic()) bodies.add(b);
+      }
+      for (const b of bodies) {
+        const m = b.mass();
+        const v = b.linvel();
+        b.applyImpulse({
+          x: (cv.x - v.x) * m * tuning.carryPull * share,
+          y: -tuning.gravity * m * DT * tuning.carryLift * share,
+          z: (cv.z - v.z) * m * tuning.carryPull * share,
+        }, true);
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- hazards
+
+  private updateHazards() {
+    const map = INCINERATOR;
+    // Conveyor: whatever rests on it is dragged toward the furnace.
+    const push = (b: RAPIER_NS.RigidBody) => {
+      if (!b.isEnabled() || !inBox(b.translation(), map.belt)) return;
+      const v = b.linvel();
+      b.applyImpulse({ x: 0, y: 0, z: (-map.beltSpeed - v.z) * b.mass() * 0.35 }, true);
+    };
+    // Players on their feet walk relative to the belt (see Ragdoll locomotion); only limp bodies get dragged.
+    for (const r of this.players.values()) if (r.active && r.stiffness < 0.35) for (const p of r.parts.values()) push(p.body);
+    for (const p of this.props) push(p.body);
+    for (const c of this.beltCrates) if (c.active) push(c.body);
+    for (const g of this.loose) if (g.active) push(g.body);
+
+    // New crates drop onto the start of the belt.
+    if (this.match.phase !== 'countdown') {
+      this.beltTimer -= DT;
+      if (this.beltTimer <= 0) {
+        this.beltTimer = 4.5 + this.rand() * 2;
+        const c = this.beltCrates.find((x) => !x.active);
+        if (c) {
+          c.active = true;
+          c.body.setEnabled(true);
+          c.body.setTranslation({ x: map.beltSpawn.x + (this.rand() - 0.5) * 1.2, y: map.beltSpawn.y, z: map.beltSpawn.z }, true);
+          c.body.setRotation(eulerYX(this.rand() * 6, 0), true);
+          c.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+          c.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+        }
+      }
+    }
+
+    // The furnace mouth incinerates whatever goes in.
+    for (const [id, r] of this.players) {
+      if (r.active && (inBox(r.chest.translation(), map.fire) || inBox(r.pelvis.translation(), map.fire))) this.eliminate(id, 'fire');
+    }
+    for (const c of this.beltCrates) {
+      if (c.active && inBox(c.body.translation(), map.fire)) { this.events.push({ type: 'burn', pos: { ...c.body.translation() } }); this.deactivateBeltCrate(c); }
+    }
+    for (const p of this.props) {
+      if (inBox(p.body.translation(), map.fire)) { this.events.push({ type: 'burn', pos: { ...p.body.translation() } }); this.resetProp(p); }
+    }
+    for (const g of this.loose) {
+      if (g.active && inBox(g.body.translation(), map.fire)) { this.events.push({ type: 'burn', pos: { ...g.body.translation() } }); this.deactivateLoose(g); }
+    }
+    for (const g of this.grenades) {
+      if (g.active && inBox(g.body.translation(), map.fire)) { this.explode({ ...g.body.translation() }); this.deactivateGrenade(g); }
+    }
+
+    // Periodic flame burst out of the mouth: it glows, then blasts everyone over the belt back out.
+    const fu = this.furnace;
+    if (this.match.phase === 'countdown') return;
+    fu.timer -= DT;
+    if (fu.timer <= 0) {
+      fu.state = fu.state === 'idle' ? 'warn' : fu.state === 'warn' ? 'burst' : 'idle';
+      fu.timer = fu.state === 'warn' ? tuning.furnaceWarn : fu.state === 'burst' ? 0.9 : tuning.furnaceEvery;
+      fu.hit.clear();
+      this.events.push({ type: 'furnace', state: fu.state });
+    }
+    if (fu.state === 'burst') {
+      for (const [id, r] of this.players) {
+        if (!r.active || fu.hit.has(id) || !inBox(r.chest.translation(), map.burst)) continue;
+        fu.hit.add(id);
+        for (const p of r.parts.values()) {
+          const mm = p.body.mass();
+          p.body.applyImpulse({ x: 0, y: tuning.furnaceLift * mm, z: tuning.furnacePush * mm }, true);
+        }
+        r.addStun(1.5);
+        this.addKo(id, tuning.furnaceKo);
+        this.events.push({
+          type: 'hit', player: id, cause: 'flame', pos: { ...r.chest.translation() }, strength: 30,
+          entity: this.entityOfBody.get(r.chest.handle) ?? -1, local: { x: 0, y: 0, z: 0 }, dir: { x: 0, y: 0.4, z: 1 },
+        });
+      }
+      for (const b of [...this.props.map((p) => p.body), ...this.beltCrates.filter((c) => c.active).map((c) => c.body)]) {
+        if (fu.hit.has(-1 - b.handle) || !inBox(b.translation(), map.burst)) continue;
+        fu.hit.add(-1 - b.handle); // props share the once-per-burst set (negative keys)
+        b.applyImpulse({ x: 0, y: 4 * b.mass(), z: 8 * b.mass() }, true);
+      }
+    }
+  }
+
+  private buildBeltCrates() {
+    for (let i = 0; i < 4; i++) {
+      const body = this.world.createRigidBody(
+        this.R.RigidBodyDesc.dynamic().setTranslation(0, HIDDEN_Y, 20 + i).setEnabled(false),
+      );
+      this.world.createCollider(
+        this.R.ColliderDesc.cuboid(0.3, 0.3, 0.3).setDensity(60).setFriction(0.8).setCollisionGroups(groups(WORLD_GROUP, 0xffff)),
+        body,
+      );
+      this.beltCrates.push({ body, active: false });
+      this.addEntity(body, { kind: 'box', hx: 0.3, hy: 0.3, hz: 0.3 }, 0x9c7a4d, 'prop');
+    }
+  }
+
+  private deactivateBeltCrate(c: { body: RAPIER_NS.RigidBody; active: boolean }) {
+    for (const r of this.players.values()) r.releaseIfAttachedTo(c.body.handle);
+    c.active = false;
+    c.body.setEnabled(false);
+    c.body.setTranslation({ x: 0, y: HIDDEN_Y, z: 0 }, false);
   }
 
   drainEvents(): SimEvent[] {
@@ -632,7 +885,7 @@ export class Sim {
     const hv = r.parts.get(hand === 0 ? 'forearmL' : 'forearmR')!.body.linvel();
     const v = { x: hv.x * 0.8 + vel.x, y: hv.y * 0.8 + vel.y, z: hv.z * 0.8 + vel.z };
     const thrown = Math.hypot(v.x, v.y, v.z) > handling.bonkSpeed;
-    this.events.push({ type: 'drop', player: id, weapon: kind, thrown });
+    this.events.push({ type: 'drop', player: id, weapon: kind, thrown, entity: this.entityOfBody.get(g.body.handle) ?? -1, empty: ammo <= 0 });
     for (const p of this.players.values()) p.releaseIfAttachedTo(g.body.handle);
     g.active = true;
     g.ammo = ammo;
@@ -677,7 +930,7 @@ export class Sim {
       if (!g.active) continue;
       g.age += DT;
       const p = g.body.translation();
-      if (p.y < tuning.killY || g.age > (g.ammo > 0 ? handling.despawn : 3)) { this.deactivateLoose(g); continue; }
+      if (p.y < tuning.killY || g.age > (g.ammo > 0 ? handling.despawn : 5)) { this.deactivateLoose(g); continue; }
       if (g.age > 0.3 && g.bonkTimer > 0) g.collider.setCollisionGroups(groups(WORLD_GROUP, 0xffff));
       // Thrown guns bonk whoever they hit.
       if (g.bonkTimer > 0) {
@@ -841,14 +1094,15 @@ export class Sim {
     this.entityVersion++;
   }
 
-  private addStatic(pos: V3, half: V3, color: number, rotY = 0, rotX = 0) {
-    const q = eulerYX(rotY, rotX);
+  private addStatic(pos: V3, half: V3, color: number, opts: Parameters<ArenaBuilder['box']>[3] = {}) {
+    const q = eulerYX(opts.rotY ?? 0, opts.rotX ?? 0);
     const body = this.world.createRigidBody(this.R.RigidBodyDesc.fixed().setTranslation(pos.x, pos.y, pos.z).setRotation(q));
     this.world.createCollider(
-      this.R.ColliderDesc.cuboid(half.x, half.y, half.z).setFriction(0.9).setCollisionGroups(groups(WORLD_GROUP, 0xffff)),
+      this.R.ColliderDesc.cuboid(half.x, half.y, half.z).setFriction(opts.friction ?? 0.9).setCollisionGroups(groups(WORLD_GROUP, 0xffff)),
       body,
     );
-    this.addEntity(body, { kind: 'box', hx: half.x, hy: half.y, hz: half.z }, color, 'static');
+    this.addEntity(body, { kind: 'box', hx: half.x, hy: half.y, hz: half.z }, color, 'static', undefined, opts.belt ? 'belt' : undefined);
+    if (opts.emissive) this.entities[this.entities.length - 1].emissive = opts.emissive;
   }
 
   private addCrate(pos: V3, size: number, color: number) {
@@ -899,38 +1153,13 @@ export class Sim {
     return this.grenades.some((g) => g.collider.handle === c.handle);
   }
 
-  /** "Cafeteria": a floating floor over a bottomless pit, with lunch tables to climb and crates to throw. */
   private buildArena() {
-    // Floor (top surface at y = 0).
-    this.addStatic({ x: 0, y: -0.5, z: 0 }, { x: 9, y: 0.5, z: 9 }, 0xe8e2d4);
-    // Accent strip so motion reads well.
-    this.addStatic({ x: 0, y: 0.01, z: 0 }, { x: 9, y: 0.02, z: 0.6 }, 0xd46a4c);
-    // Lunch tables.
-    this.addStatic({ x: -4.5, y: 0.75, z: -3 }, { x: 2, y: 0.08, z: 0.7 }, 0x8a5a3b);
-    this.addStatic({ x: -4.5, y: 0.35, z: -3 }, { x: 0.15, y: 0.35, z: 0.5 }, 0x5b3a26);
-    this.addStatic({ x: 4.5, y: 0.75, z: 3 }, { x: 2, y: 0.08, z: 0.7 }, 0x8a5a3b);
-    this.addStatic({ x: 4.5, y: 0.35, z: 3 }, { x: 0.15, y: 0.35, z: 0.5 }, 0x5b3a26);
-    // Raised stage with a ramp.
-    this.addStatic({ x: 0, y: 0.5, z: -7 }, { x: 4, y: 0.5, z: 2 }, 0x6c8ebf);
-    this.addStatic({ x: 0, y: 0.45, z: -3.9 }, { x: 2, y: 0.08, z: 1.3 }, 0x8fb0de, 0, 0.42);
-    // Crates.
-    this.addCrate({ x: 2, y: 0.5, z: -1 }, 0.35, 0xc9a26b);
-    this.addCrate({ x: -2, y: 0.5, z: 2 }, 0.35, 0xc9a26b);
-    this.addCrate({ x: 1, y: 1.6, z: -7 }, 0.45, 0xb98d55);
-    this.addCrate({ x: -6, y: 0.3, z: 6.5 }, 0.25, 0xd8b47c);
-
-    // Weapon pickups (floor-level positions; the model floats above).
-    this.addPickup('pistol', { x: 5.5, y: 0, z: -4 });
-    this.addPickup('pistol', { x: -5.5, y: 0, z: 4.5 });
-    this.addPickup('shotgun', { x: 4.5, y: 0, z: 6.5 });
-    this.addPickup('grenade', { x: -2.5, y: 1, z: -7 });
-
-    this.spawns = [
-      { x: 0, y: 0, z: 3 },
-      { x: 0, y: 0, z: 0.5 },
-      { x: -3, y: 0, z: 0 },
-      { x: 3, y: 0, z: 0 },
-    ];
+    buildIncinerator({
+      box: (pos, half, color, opts) => this.addStatic(pos, half, color, opts),
+      crate: (pos, size, color) => this.addCrate(pos, size, color),
+      pickup: (kind, pos) => this.addPickup(kind, pos),
+    });
+    this.spawns = INCINERATOR.spawns;
   }
 }
 

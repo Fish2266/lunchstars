@@ -10,8 +10,8 @@ Work one phase at a time. A phase is done only when its "done when" is true. Com
 | 1 | Jointed ragdoll, balance controller, debug sliders | It stands, gets shoved, recovers in a way that makes you smile | ✅ first pass — keep tuning |
 | 2 | Walk cycle, jump, hand grabbing, 3rd-person camera | You can wrestle a physics crate around | ✅ first pass — lifting heavy things is weak |
 | 3 | Guns: aim, hitscan/projectiles, knockback, stun, pickups | Shooting someone off a ledge feels great | ✅ first pass — needs real-player feel test |
-| 4 | Hazards (pit, lava, spikes, mover), elimination, rounds, scoreboard | Full local match vs dummy / 2nd keyboard | next |
-| 5 | PeerJS lobby, host-authoritative sim, snapshots + interpolation | Two browsers on different networks play a full match | |
+| 4 | Hazards, elimination, rounds, scoreboard (Incinerator map) | Full local match vs dummy / 2nd keyboard | ✅ first pass |
+| 5 | PeerJS lobby, host-authoritative sim, snapshots + interpolation | Two browsers on different networks play a full match | next |
 | 6 | Polish: juice, toon look, customization, audio, settings, perf | 60 FPS on a mid laptop and it feels great | |
 | 7 | (optional) Dedicated Node/Colyseus server | 6–8 players, no host advantage | |
 
@@ -67,9 +67,21 @@ Gang Beasts PC uses one input per hand (tap = punch, hold = grab). We use:
 - Punches and bullets are swept spheres (punch 0.28 m, pistol 6 cm, pellets 4.5 cm), so close-range near misses count. Punch reach ≈ 1.3 m chest-to-chest.
 - The crosshair turns into a yellow ring whenever a punch would land (same sweep as the real punch).
 
+## Phase 4: the Incinerator (done, first pass)
+Inspired by the Gang Beasts map: an industrial room on a ledge with a furnace at the back fed by a conveyor.
+- Elimination: over the waist-high parapet (or through the gap at front-left) → fall; into the furnace mouth → incinerated. In a match you're out for the round; Practice (panel) respawns instead.
+- Conveyor (moving hazard): low enough to walk onto; carries anything on it into the furnace at 1.5 m/s. Standing players walk relative to it (you can walk off); limp bodies get dragged. Crates drop onto it every ~5 s.
+- Furnace burst (survivable hazard, replaces spikes): every 9 s it glows for 1.3 s, then blasts flame over the belt: big push out of the mouth + 45 KO.
+- Catwalk with ramp (left), side room with door/windows and guns (right).
+- Rounds: 3-2-1 countdown (frozen), last one standing, first to 3 wins, rematch with Jump (or auto after 12 s). KO escalation resets each round. Score pips, banners, kill feed, slow-mo on eliminations, spectate the survivor.
+- Carrying: anything you hold (a KO'd player, a crate) is partly lifted and pulled along with you.
+- Bot: avoids the furnace/belt/edges, and tries to drag KO'd players onto the belt (works sometimes; it's slow against a 4 s knockout).
+- Empty guns smoke on the ground until they vanish; blood puddles fade out (and fade away between rounds).
+
 ## Known feel issues / tuning backlog
 - Grab reach takes ~0.8 s; consider stronger arm gains while grabbing.
 - One-handed lifting of a 20 kg crate doesn't work; two hands + stronger arms, or lighter props.
 - Slight residual wobble (~5°) after recovering from a knockdown.
 - Aiming arms sway ±8° for ~0.7 s after a fast flick (cosmetic: shots use the crosshair aim, not the arm).
 - Weapon sliders aren't saved to localStorage yet (only `tuning` is).
+- Bot hauling to the furnace only succeeds sometimes before the target wakes up.

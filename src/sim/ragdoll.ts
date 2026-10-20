@@ -234,7 +234,27 @@ export class Ragdoll {
     this.staggerTimer = Math.max(this.staggerTimer, tuning.staggerTime);
   }
 
-  teleport(pos: { x: number; y: number; z: number }) {
+  /** Set by the sim: velocity of a moving surface (like the conveyor) under a point, or null. */
+  surfaceVelocity: (p: { x: number; y: number; z: number }) => { x: number; z: number } | null = () => null;
+
+  /** False while eliminated: the body is parked out of the world and doesn't simulate. */
+  active = true;
+
+  setActive(on: boolean) {
+    this.active = on;
+    this.releaseAll();
+    for (const p of this.parts.values()) {
+      if (!on) {
+        p.body.setTranslation({ x: p.def.offset[0], y: -1000 + p.def.offset[1], z: p.def.offset[2] }, false);
+        p.body.setLinvel({ x: 0, y: 0, z: 0 }, false);
+        p.body.setAngvel({ x: 0, y: 0, z: 0 }, false);
+      }
+      p.body.setEnabled(on);
+    }
+  }
+
+  teleport(pos: { x: number; y: number; z: number }, yaw = 0) {
+    if (!this.active) this.setActive(true);
     this.releaseAll();
     for (const p of this.parts.values()) {
       p.body.setTranslation({ x: pos.x + p.def.offset[0], y: pos.y + p.def.offset[1], z: pos.z + p.def.offset[2] }, true);
@@ -244,7 +264,7 @@ export class Ragdoll {
     }
     this.stunTimer = 0;
     this.staggerTimer = 0;
-    this.yaw = 0;
+    this.yaw = yaw;
     for (const leg of this.legs) { leg.planted = false; leg.swinging = false; }
     this.smoothVel.x = 0; this.smoothVel.z = 0;
   }
@@ -460,6 +480,9 @@ export class Ragdoll {
       } else if (leg.planted) {
         // Pin it horizontally (what a real sole's grip does), easing in so landing doesn't jolt the hips.
         leg.plantAge += dt;
+        // A planted foot on a moving surface (the conveyor) rides along with it.
+        const sv = this.surfaceVelocity(leg.plant);
+        if (sv) { leg.plant.x += sv.x * dt; leg.plant.z += sv.z * dt; }
         const g = t.footDrive * m * k * Math.min(1, leg.plantAge * 10);
         const ax = (leg.plant.x - leg.sole.x) * 12 - fv.x, az = (leg.plant.z - leg.sole.z) * 12 - fv.z;
         shin.applyImpulseAtPoint({ x: ax * g, y: 0, z: az * g }, leg.sole, true);
@@ -486,8 +509,10 @@ export class Ragdoll {
     };
 
     // --- Locomotion ---
-    const dvx = mx * t.moveSpeed - pv.x;
-    const dvz = mz * t.moveSpeed - pv.z;
+    // Walk relative to what we're standing on, so the conveyor moves you but you can still walk off it.
+    const gv = this.grounded ? this.surfaceVelocity({ x: pp.x, y: Math.min(legL.sole.y, legR.sole.y) + 0.1, z: pp.z }) : null;
+    const dvx = mx * t.moveSpeed + (gv ? gv.x : 0) - pv.x;
+    const dvz = mz * t.moveSpeed + (gv ? gv.z : 0) - pv.z;
     if (this.grounded) {
       // While staggered we can't brake, so knockback carries us.
       const control = this.staggerTimer > 0 ? 0.1 : 1;

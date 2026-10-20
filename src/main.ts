@@ -4,6 +4,7 @@ import { Bot, type BotMode } from './client/bot';
 import { Controls } from './client/controls';
 import { keyFor, loadSettings } from './client/bindings';
 import { Menu } from './client/menu';
+import { MatchHud } from './client/matchHud';
 import { createDebugPanel, loadSavedTuning } from './client/debug';
 import { Effects } from './render/effects';
 import { Renderer } from './render/renderer';
@@ -12,7 +13,8 @@ import { DT, koThreshold, PLAYER_COLORS, Sim } from './sim/sim';
 import { tuning } from './sim/tuning';
 import { explosive, handling, punch, weapons, type WeaponKind } from './sim/weapons';
 import { Gore, goreSettings } from './render/gore';
-import { animateModels } from './render/models';
+import { animateModels, setBeltSpeed } from './render/models';
+import { INCINERATOR } from './sim/incinerator';
 
 const LOCAL_ID = 0;
 const DUMMY_ID = 1;
@@ -26,6 +28,9 @@ async function main() {
   const me = sim.addPlayer(LOCAL_ID);
   const dummy = sim.addPlayer(DUMMY_ID);
   const bot = new Bot(sim, DUMMY_ID, LOCAL_ID);
+  bot.mode = 'chase + shoot';
+  setBeltSpeed(INCINERATOR.beltSpeed);
+  sim.startMatch();
 
   const renderer = new Renderer(document.body);
   const effects = new Effects(renderer.scene, LOCAL_ID);
@@ -85,6 +90,11 @@ async function main() {
   wf.add(give, 'give').name('Spawn weapon at my hand');
   const botFolder = gui.addFolder('Dummy');
   botFolder.add(bot, 'mode', ['idle', 'chase', 'chase + shoot'] satisfies BotMode[]).name('behavior');
+  const modeOpts = { practice: false };
+  gui.add(modeOpts, 'practice').name('Practice (no rounds)').onChange((on: boolean) => {
+    if (on) sim.setPractice(); else sim.startMatch();
+    gore.fadeAll();
+  });
   botFolder.add({ arm: () => sim.giveWeapon(DUMMY_ID, 'pistol', 1) }, 'arm').name('Give dummy a pistol');
   const hf = wf.addFolder('handling');
   hf.add(handling, 'dropThreshold', 5, 200, 1).name('hit to drop gun');
@@ -136,6 +146,7 @@ async function main() {
   const camFwd = new THREE.Vector3();
   const raycaster = new THREE.Raycaster();
   const aimPoint = new THREE.Vector3();
+  const matchHud = new MatchHud(sim, LOCAL_ID);
   let acc = 0;
   let last = performance.now();
   let fpsFrames = 0, fpsTime = 0;
@@ -167,10 +178,18 @@ async function main() {
   }
 
   function frame(now: number) {
-    const frameDt = Math.min(0.1, (now - last) / 1000);
+    const realDt = Math.min(0.1, (now - last) / 1000);
     last = now;
+    // A beat of slow motion when someone is eliminated.
+    matchHud.slowmo = Math.max(0, matchHud.slowmo - realDt);
+    const frameDt = realDt * (matchHud.slowmo > 0 ? 0.3 : 1);
 
-    if (controls.consume('reset')) { sim.resetAll(); gore.clear(); }
+    if (controls.consume('reset')) {
+      if (sim.match.phase === 'practice') sim.resetAll(); else sim.startMatch();
+      gore.fadeAll();
+    }
+    // Match over: jump starts the rematch.
+    if (sim.match.phase === 'matchOver' && controls.consume('jump')) sim.startMatch();
     if (controls.consume('shoveDummy')) shoveDummy();
     if (controls.consume('panel')) gui.show(gui._hidden);
 
@@ -192,6 +211,8 @@ async function main() {
     sim.writeTransforms(transforms);
     for (const e of sim.drainEvents()) {
       effects.handle(e);
+      matchHud.handle(e);
+      if (e.type === 'countdown') gore.fadeAll();
       if (e.type === 'hit') {
         gore.wound(e, transforms);
         if (e.by === LOCAL_ID && e.player !== LOCAL_ID) hitMarkerTimer = 0.15;
@@ -204,7 +225,9 @@ async function main() {
         }
       }
     }
-    effects.update(frameDt);
+    effects.update(frameDt, transforms, { state: sim.furnace.state, mouth: INCINERATOR.furnaceMouth });
+    renderer.setFurnace(sim.furnace.state);
+    matchHud.update(realDt);
     gore.update(frameDt, transforms);
     animateModels(now / 1000);
     hitMarkerTimer = Math.max(0, hitMarkerTimer - frameDt);
@@ -217,8 +240,12 @@ async function main() {
     // Render.
     renderer.applyTransforms(transforms);
 
-    // Over-the-shoulder third-person camera, smoothed, with shake.
-    const o = me.aimOrigin();
+    // Over-the-shoulder third-person camera, smoothed, with shake. Once you're out, follow whoever's left.
+    let o = me.aimOrigin();
+    if (!me.active) {
+      const other = [...sim.players.values()].find((p) => p.active);
+      o = other ? other.aimOrigin() : { x: 0, y: 1.6, z: 1 };
+    }
     camTarget.lerp(new THREE.Vector3(o.x, o.y, o.z), 1 - Math.exp(-frameDt * 12));
     const dist = 3.6;
     const cp = Math.cos(controls.pitch), sp = Math.sin(controls.pitch);

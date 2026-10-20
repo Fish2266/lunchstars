@@ -14,6 +14,12 @@ export class Renderer {
   /** Objects not tied to one entity (skinned bodies). */
   private extra: THREE.Object3D[] = [];
   private faces = new Map<number, Face>();
+  private furnaceLight: THREE.PointLight;
+  private furnaceState: 'idle' | 'warn' | 'burst' = 'idle';
+
+  setFurnace(state: 'idle' | 'warn' | 'burst') {
+    this.furnaceState = state;
+  }
   private builtVersion = -1;
   private sun: THREE.DirectionalLight;
 
@@ -26,11 +32,12 @@ export class Renderer {
     this.gl.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(this.gl.domElement);
 
-    this.scene.background = new THREE.Color(0x8ec5ff);
-    this.scene.fog = new THREE.Fog(0x8ec5ff, 30, 90);
+    // Industrial dusk: smoky sky, warm bounce from the furnace, a hazy drop below.
+    this.scene.background = new THREE.Color(0x2b2f38);
+    this.scene.fog = new THREE.Fog(0x2b2f38, 22, 60);
 
-    this.scene.add(new THREE.HemisphereLight(0xdff1ff, 0x6b5b4b, 1.4));
-    this.sun = new THREE.DirectionalLight(0xfff2dd, 2.2);
+    this.scene.add(new THREE.HemisphereLight(0xc9d6ff, 0x5a3a2a, 1.25));
+    this.sun = new THREE.DirectionalLight(0xffe2c4, 2.0);
     this.sun.position.set(8, 16, 6);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
@@ -40,16 +47,20 @@ export class Renderer {
     this.sun.shadow.normalBias = 0.02;
     this.scene.add(this.sun);
 
-    // Distant "void" clouds so the pit reads as deep.
-    const cloudMat = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 });
+    // Smoke banks far below, so the drop off the ledge reads as deep.
+    const smokeMat = new THREE.MeshLambertMaterial({ color: 0x45484f, transparent: true, opacity: 0.8 });
     for (let i = 0; i < 40; i++) {
-      const c = new THREE.Mesh(new THREE.SphereGeometry(2 + Math.random() * 3, 10, 8), cloudMat);
+      const c = new THREE.Mesh(new THREE.SphereGeometry(2 + Math.random() * 3, 10, 8), smokeMat);
       const a = Math.random() * Math.PI * 2;
-      const d = 18 + Math.random() * 40;
-      c.position.set(Math.cos(a) * d, -14 - Math.random() * 10, Math.sin(a) * d);
+      const d = 14 + Math.random() * 40;
+      c.position.set(Math.cos(a) * d, -12 - Math.random() * 10, Math.sin(a) * d);
       c.scale.y = 0.5;
       this.scene.add(c);
     }
+    // Furnace glow: a warm light in the mouth that flickers, and flares before and during a burst.
+    this.furnaceLight = new THREE.PointLight(0xff7a2a, 30, 14, 1.6);
+    this.furnaceLight.position.set(0, 1.3, -5.0);
+    this.scene.add(this.furnaceLight);
 
     const resize = () => {
       this.gl.setSize(innerWidth, innerHeight);
@@ -132,6 +143,9 @@ export class Renderer {
 
   render() {
     const t = performance.now() / 1000;
+    const flicker = 0.85 + 0.15 * Math.sin(t * 13) * Math.sin(t * 7.3);
+    const base = this.furnaceState === 'burst' ? 120 : this.furnaceState === 'warn' ? 45 + 25 * Math.sin(t * 30) : 30;
+    this.furnaceLight.intensity = base * flicker;
     for (const f of this.faces.values()) f.animate(t);
     this.gl.render(this.scene, this.camera);
   }
@@ -152,15 +166,16 @@ function geometryFor(s: ShapeDesc): THREE.BufferGeometry {
 
 const matCache = new Map<string, THREE.Material>();
 function materialFor(e: EntityDesc): THREE.Material {
-  const key = `${e.role}:${e.color}`;
+  const key = `${e.role}:${e.color}:${e.emissive ?? 0}`;
   let m = matCache.get(key);
   if (!m) {
+    const glow = e.emissive ?? (e.role === 'fx' ? 0.25 : 0);
     m = new THREE.MeshStandardMaterial({
       color: e.color,
       roughness: e.role === 'player' ? 0.55 : e.role === 'fx' ? 0.35 : 0.85,
       metalness: e.role === 'fx' ? 0.3 : 0,
-      emissive: e.role === 'fx' ? e.color : 0x000000,
-      emissiveIntensity: e.role === 'fx' ? 0.25 : 0,
+      emissive: glow > 0 ? e.color : 0x000000,
+      emissiveIntensity: glow,
     });
     matCache.set(key, m);
   }

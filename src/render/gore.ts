@@ -19,6 +19,8 @@ const MAX_WOUNDS = 24;
 const MAX_CASINGS = 120;
 const GRAVITY = -18;
 const SPLAT_LIFE = 30;
+/** Puddles fade out over this many seconds at the end of their life. */
+const SPLAT_FADE = 4;
 
 interface Wound {
   entity: number;
@@ -63,6 +65,9 @@ export class Gore {
 
   private splats: THREE.InstancedMesh;
   private splatBorn = new Float32Array(MAX_SPLATS);
+  /** When each puddle is fully gone (it fades over the SPLAT_FADE seconds before). */
+  private splatEnd = new Float32Array(MAX_SPLATS);
+  private splatAlpha = new THREE.InstancedBufferAttribute(new Float32Array(MAX_SPLATS), 1);
   private splatSize = new Float32Array(MAX_SPLATS);
   private splatPos = new Float32Array(MAX_SPLATS * 3);
   private splatRot = new Float32Array(MAX_SPLATS);
@@ -87,9 +92,20 @@ export class Gore {
     scene.add(this.drops);
 
     const splatGeo = new THREE.CircleGeometry(1, 14).rotateX(-Math.PI / 2);
+    // Per-puddle opacity (an instanced attribute patched into the standard material) so puddles fade out.
+    splatGeo.setAttribute('instanceAlpha', this.splatAlpha);
     const splatMat = new THREE.MeshStandardMaterial({
       roughness: 0.15, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+      transparent: true, depthWrite: false,
     });
+    splatMat.onBeforeCompile = (shader) => {
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nattribute float instanceAlpha;\nvarying float vInstanceAlpha;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvInstanceAlpha = instanceAlpha;');
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying float vInstanceAlpha;')
+        .replace('vec4 diffuseColor = vec4( diffuse, opacity );', 'vec4 diffuseColor = vec4( diffuse, opacity * vInstanceAlpha );');
+    };
     this.splats = new THREE.InstancedMesh(splatGeo, splatMat, MAX_SPLATS);
     this.splats.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_SPLATS * 3), 3);
     this.splats.count = 0;
@@ -164,6 +180,7 @@ export class Gore {
     this.updateCasings(dt);
   }
 
+  /** Wipe everything at once (debug). */
   clear() {
     this.count = 0;
     this.wounds.length = 0;
@@ -171,6 +188,17 @@ export class Gore {
     this.splatUsed = 0;
     this.splats.count = 0;
   }
+
+  /** Fade every puddle away over `seconds` (between rounds) instead of popping it. */
+  fadeAll(seconds = 1.2) {
+    this.wounds.length = 0;
+    for (let i = 0; i < this.splatUsed; i++) {
+      // End so that the fade (which spans SPLAT_FADE) is already most of the way through.
+      this.splatEnd[i] = Math.min(this.splatEnd[i], this.time + seconds);
+    }
+    this.fastFade = seconds;
+  }
+  private fastFade = 0;
 
   // ------------------------------------------------------------------ internals
 
@@ -284,6 +312,7 @@ export class Gore {
     this.splatNext = (this.splatNext + 1) % MAX_SPLATS;
     this.splatUsed = Math.min(MAX_SPLATS, this.splatUsed + 1);
     this.splatBorn[i] = this.time;
+    this.splatEnd[i] = this.time + SPLAT_LIFE;
     // Splats are much wider than the drop: cartoon puddles.
     this.splatSize[i] = size * (1.8 + Math.random() * 1.8);
     this.splatPos[i * 3] = x; this.splatPos[i * 3 + 1] = y + 0.004 + Math.random() * 0.002; this.splatPos[i * 3 + 2] = z;
@@ -297,10 +326,12 @@ export class Gore {
   private updateSplats() {
     for (let i = 0; i < this.splatUsed; i++) {
       const age = this.time - this.splatBorn[i];
-      // Grow quickly as it lands, shrink away at the end of its life.
+      // Spread quickly as it lands; fade out (not shrink) at the end of its life.
       const grow = Math.min(1, age * 12);
-      const shrink = age > SPLAT_LIFE - 3 ? Math.max(0, (SPLAT_LIFE - age) / 3) : 1;
-      const r = this.splatSize[i] * grow * shrink;
+      const left = this.splatEnd[i] - this.time;
+      const fade = this.fastFade > 0 ? this.fastFade : SPLAT_FADE;
+      this.splatAlpha.setX(i, Math.max(0, Math.min(1, left / fade)));
+      const r = this.splatSize[i] * grow * (left > 0 ? 1 : 0);
       _q.setFromAxisAngle(UP, this.splatRot[i]);
       _s.set(r, 1, r * 0.8);
       _m.compose(_v.set(this.splatPos[i * 3], this.splatPos[i * 3 + 1], this.splatPos[i * 3 + 2]), _q, _s);
@@ -308,6 +339,13 @@ export class Gore {
     }
     this.splats.count = this.splatUsed;
     this.splats.instanceMatrix.needsUpdate = true;
+    this.splatAlpha.needsUpdate = true;
+    // Once a round-reset fade has finished, go back to the normal slow fade for new puddles.
+    if (this.fastFade > 0 && this.splatUsed > 0 && [...this.splatEnd.subarray(0, this.splatUsed)].every((e) => e <= this.time)) {
+      this.fastFade = 0;
+      this.splatUsed = 0;
+      this.splatNext = 0;
+    }
   }
 
   private updateCasings(dt: number) {

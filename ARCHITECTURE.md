@@ -5,6 +5,7 @@ src/
   sim/        PURE simulation — no DOM, no Three rendering, no networking
     sim.ts      World, arena, fixed-step loop, weapons/pickups/grenades, SimEvents, transform snapshot
     weapons.ts  Weapon, explosive, and punch definitions (feel numbers, edited live)
+    incinerator.ts  The map: geometry via an ArenaBuilder, plus hazard volumes (fire, belt, burst) the sim uses
     ragdoll.ts  Active ragdoll: bodies, joints, balance/pose PD controllers, walk cycle, grab
     tuning.ts   Every feel number (edited live by the debug panel)
     input.ts    PlayerInput — the only thing a player sends to the sim
@@ -14,7 +15,8 @@ src/
     models.ts   Display models (guns, grenade, faces); collision still uses simple shapes
     body.ts     One-piece gummy character (bean torso+head, tapered limbs): smooth-union SDF of all parts, meshed once with marching cubes,
                 skinned to 11 bones that copy the physics bodies (one draw call, no seams)
-  client/     Browser-only: controls (via bindings.ts, remappable), menu.ts (pause + settings), lil-gui tuning panel,
+  client/     Browser-only: controls (via bindings.ts, remappable), menu.ts (pause + settings), matchHud.ts
+              (score pips, banners, kill feed, slow-mo), lil-gui tuning panel,
               bot (makes PlayerInput like a human)
   main.ts     Wires it together: input -> sim.step (fixed 60 Hz) -> transforms -> render
 ```
@@ -75,3 +77,9 @@ npm run typecheck
 - `hit` events carry the body part's entity index and the wound point in that part's local frame. The client pins a "wound" emitter there, so fountains ride the ragdoll.
 - Droplets are struct-of-arrays ballistic points drawn as one InstancedMesh (stretched along velocity). One ground raycast per wound every 0.25 s; droplets below that height become splats in a ring-buffer InstancedMesh.
 - Nothing touches physics or the network.
+
+## Rounds and hazards
+- `Sim.match` is a small state machine: practice | countdown | playing | roundOver | matchOver. `startMatch()` / `setPractice()`. Elimination (`eliminate`) parks the ragdoll out of the world (`Ragdoll.setActive(false)`); a new round `resetAll()`s everything and reactivates everyone.
+- Hazards live in `Sim.updateHazards` and read volumes from the map module: belt push (limp bodies, props, guns), crate spawner, fire volume, and the furnace burst cycle (`Sim.furnace`, broadcast as `furnace` events).
+- `Ragdoll.surfaceVelocity` tells a character what moving surface is under them: planted feet ride along and walking is relative to it.
+- Match/round events (`countdown`, `roundStart`, `eliminated`, `roundOver`, `matchOver`) drive the HUD; they'll go over the reliable channel in multiplayer.

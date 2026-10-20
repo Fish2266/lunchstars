@@ -70,6 +70,9 @@ export const tuning = {
   // Grab.
   grabRadius: 0.2,
   grabBreakForce: 0, // reserved: 0 = unbreakable
+  // Carrying: how much a held body follows you (per tick) and how much of its weight you take.
+  carryPull: 0.12,
+  carryLift: 0.6,
 
   // Hits and stun.
   shoveImpulse: 14,
@@ -93,6 +96,13 @@ export const tuning = {
   koRepeatEase: 0.75, // each earlier knockout multiplies the threshold by this (down to koMinThreshold)
   koMinThreshold: 0.35,
   koMash: 0.06, // seconds cut from a knockout per button press
+
+  // Incinerator furnace burst.
+  furnaceEvery: 9, // seconds between bursts
+  furnaceWarn: 1.3, // glow before it blows
+  furnacePush: 7, // m/s out of the mouth
+  furnaceLift: 4,
+  furnaceKo: 45,
 
   // World.
   gravity: -18,
