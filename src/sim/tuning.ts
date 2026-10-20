@@ -78,6 +78,20 @@ export const tuning = {
   staggerTime: 0.4, // seconds of lost footing after any hit
   stunPerImpulse: 0.1, // stun seconds added per unit of impulse
 
+  // Knockouts (Gang Beasts style): hits fill a hidden meter; at `koThreshold` you go limp for a while.
+  koThreshold: 100,
+  koPunch: 16, // per punch
+  koHeadMult: 2.2, // punches and bonks to the head count this much more (shots 1.5x)
+  koShot: 9, // per pistol hit / per shotgun pellet scales from knockback
+  koBonk: 25,
+  koBlast: 80, // at the center of an explosion
+  koDecayDelay: 1.2, // seconds after a hit before the meter drains
+  koDecay: 14, // meter per second
+  koTime: 4, // seconds knocked out
+  koTimePerRepeat: 1, // each knockout this life adds this much (up to koTimeMax)
+  koTimeMax: 8,
+  koMash: 0.06, // seconds cut from a knockout per button press
+
   // World.
   gravity: -18,
   killY: -15,

@@ -108,7 +108,9 @@ export class Gore {
 
   /** A hit on a player: an immediate spray plus a pulsing fountain pinned to the wound. */
   wound(e: Extract<SimEvent, { type: 'hit' }>, transforms: Float32Array) {
+    // Only guns and explosions bleed; punches and bonks don't.
     if (goreSettings.mode === 'off' || e.entity < 0) return;
+    if (e.cause !== 'shot' && e.cause !== 'pellet' && e.cause !== 'blast') return;
     const o = e.entity * 7;
     _q.set(transforms[o + 3], transforms[o + 4], transforms[o + 5], transforms[o + 6]);
     const power = THREE.MathUtils.clamp(e.strength / 14, 0.5, 3) * goreSettings.amount;
@@ -228,8 +230,19 @@ export class Gore {
     this.ground[i] = this.ground[last];
   }
 
+  private groundCursor = 0;
+
   private updateDrops(dt: number) {
     const colors = this.drops.instanceColor!.array as Float32Array;
+    // Re-find the ground under a slice of the droplets each frame (round robin, capped), so drops that fly
+    // past a ledge fall into the pit and drops over a table land on the table, instead of splatting in mid-air.
+    const checks = Math.min(this.count, 120);
+    for (let n = 0; n < checks; n++) {
+      const i = (this.groundCursor + n) % this.count;
+      const i3 = i * 3;
+      this.ground[i] = this.groundAt({ x: this.pos[i3], y: this.pos[i3 + 1], z: this.pos[i3 + 2] });
+    }
+    if (this.count > 0) this.groundCursor = (this.groundCursor + checks) % this.count;
     for (let i = 0; i < this.count; i++) {
       const i3 = i * 3;
       this.vel[i3 + 1] += GRAVITY * dt;
@@ -238,7 +251,12 @@ export class Gore {
       this.pos[i3 + 2] += this.vel[i3 + 2] * dt;
       const y = this.pos[i3 + 1];
       if (y <= this.ground[i] || y < -30) {
-        if (y > -30 && this.ground[i] > -1e6) this.splat(this.pos[i3], this.ground[i], this.pos[i3 + 2], this.size[i], this.color, i3);
+        if (y > -30 && this.ground[i] > -1e6) {
+          // Confirm there really is ground right here before leaving a puddle.
+          const g = this.groundAt({ x: this.pos[i3], y: this.ground[i] + 0.25, z: this.pos[i3 + 2] });
+          if (Math.abs(g - this.ground[i]) > 0.2) { this.ground[i] = g; continue; }
+          this.splat(this.pos[i3], this.ground[i], this.pos[i3 + 2], this.size[i], this.color, i3);
+        }
         this.kill(i);
         i--;
         continue;

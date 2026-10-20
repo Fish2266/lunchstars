@@ -30,6 +30,7 @@ export interface EntityDesc {
 export type ModelKind = WeaponKind | 'grenadeLive' | 'head' | 'torso' | 'hips' | 'limb' | 'forearm' | 'shin';
 
 export type V3 = { x: number; y: number; z: number };
+export type HitCause = 'punch' | 'shot' | 'pellet' | 'blast' | 'bonk' | 'shove';
 type Q = { x: number; y: number; z: number; w: number };
 
 /** Things the client turns into effects (and, in multiplayer, reliable events). Drain with `drainEvents()`. */
@@ -39,7 +40,9 @@ export type SimEvent =
   | { type: 'throw'; player: number; pos: V3 }
   | { type: 'explosion'; pos: V3; radius: number }
   /** A player got hit. `entity`/`local` pin the wound to a body part (for blood); `dir` is the shot direction. */
-  | { type: 'hit'; player: number; by?: number; pos: V3; strength: number; entity: number; local: V3; dir: V3 }
+  | { type: 'hit'; player: number; by?: number; cause: HitCause; pos: V3; strength: number; entity: number; local: V3; dir: V3 }
+  | { type: 'ko'; player: number; seconds: number }
+  | { type: 'wake'; player: number }
   | { type: 'drop'; player: number; weapon: WeaponKind; thrown: boolean }
   | { type: 'pickup'; player: number; weapon: WeaponKind; pos: V3 }
   | { type: 'empty'; player: number };
@@ -106,6 +109,14 @@ export interface Fighter {
   /** Direction of the last hit this tick (so dropped items fly the right way). */
   hitDir: V3;
   slot: number;
+  /** Knockout meter 0..koThreshold, seconds since last hit, and the knockout itself. */
+  ko: number;
+  sinceHit: number;
+  koTimer: number;
+  koCount: number;
+  /** Hits taken this life, for the debug HUD. */
+  hitsTaken: number;
+  mashPrev: boolean;
 }
 
 /** The hand whose item the mouse would use, or null if both hands are empty. */
@@ -202,6 +213,7 @@ export class Sim {
     this.fighters.set(id, {
       hands: [makeHand(), makeHand()], active: 1, cooldown: 0, prevFire: false, prevCycle: false,
       hitAccum: 0, hitDir: { x: 0, y: 0, z: 0 }, slot,
+      ko: 0, sinceHit: 99, koTimer: 0, koCount: 0, hitsTaken: 0, mashPrev: false,
     });
     // Reaching hands pick guns up instead of latching onto them.
     r.ignoreGrab = (c) => this.loose.some((g) => g.active && g.collider.handle === c.handle);
@@ -228,6 +240,9 @@ export class Sim {
     r.teleport({ x: s.x, y: s.y + tuning.standHeight + 0.3, z: s.z });
     this.giveWeapon(id, null, 0);
     this.giveWeapon(id, null, 1);
+    const f = this.fighters.get(id)!;
+    f.ko = 0; f.koTimer = 0; f.koCount = 0; f.hitsTaken = 0; f.sinceHit = 99;
+    r.knockedOut = false;
   }
 
   resetAll() {
@@ -241,8 +256,11 @@ export class Sim {
   step(inputs: ReadonlyMap<number, PlayerInput>) {
     this.world.gravity = { x: 0, y: tuning.gravity, z: 0 };
     for (const [id, r] of this.players) {
-      const input = inputs.get(id) ?? emptyInput();
+      const raw = inputs.get(id) ?? emptyInput();
       const f = this.fighters.get(id)!;
+      this.updateKnockout(id, r, f, raw);
+      // Knocked out: no control at all (the body still faces where it was).
+      const input = f.koTimer > 0 ? { ...emptyInput(), aimYaw: r.yaw } : raw;
       this.updateHands(id, r, f, input);
       r.step(input, DT);
       this.updateFire(id, r, f, input);
@@ -308,7 +326,7 @@ export class Sim {
     const muzzle = this.muzzle(r, kind, dir, hi);
     for (let i = 0; i < w.pellets; i++) {
       const d = this.spreadDir(dir, w.spread);
-      const res = this.hitscan(id, origin, d, w.range, w.knockback, w.falloff, w.lift);
+      const res = this.hitscan(id, origin, d, w.range, w.knockback, w.falloff, w.lift, w.pellets > 1 ? 'pellet' : 'shot');
       this.events.push({ type: 'shot', player: id, weapon: kind, from: muzzle, to: res.point, hit: res.hit, first: i === 0, dir: d });
     }
     if (w.recoil > 0) {
@@ -332,7 +350,7 @@ export class Sim {
    * Cast a ray and knock back whatever it hits. Every gun (and the debug shove) goes through here.
    * `falloff` is the knockback multiplier at max range.
    */
-  hitscan(shooter: number | undefined, origin: V3, dir: V3, range: number, knockback: number, falloff: number, lift = 0.25) {
+  hitscan(shooter: number | undefined, origin: V3, dir: V3, range: number, knockback: number, falloff: number, lift = 0.25, cause: HitCause = 'shove') {
     const ignore = shooter !== undefined ? this.players.get(shooter) : undefined;
     const ray = new this.R.Ray(origin, dir);
     const hit = this.world.castRay(ray, range, true, undefined, undefined, undefined, undefined,
@@ -351,8 +369,14 @@ export class Sim {
       const s = owner.totalMass / 10;
       owner.hit(body, { x: imp.x * s, y: imp.y * s, z: imp.z * s }, point, strength);
       this.noteHit(owner.playerId, strength, dir);
+      const head = owner.partName(body.handle) === 'head';
+      const t = tuning;
+      const ko = cause === 'punch' ? t.koPunch * (head ? t.koHeadMult : 1)
+        : cause === 'shot' || cause === 'pellet' ? t.koShot * (strength / 20) * (head ? 1.5 : 1)
+        : 0;
+      this.addKo(owner.playerId, ko);
       this.events.push({
-        type: 'hit', player: owner.playerId, by: shooter, pos: point, strength,
+        type: 'hit', player: owner.playerId, by: shooter, cause, pos: point, strength,
         entity: this.entityOfBody.get(body.handle) ?? -1, local: worldToLocal(body, point), dir,
       });
     } else {
@@ -427,9 +451,10 @@ export class Sim {
         const cp = r.chest.translation();
         const away = norm({ x: cp.x - c.x, y: cp.y - c.y + 0.5, z: cp.z - c.z });
         this.noteHit(r.playerId, explosive.strength * maxF * 5, away);
+        this.addKo(r.playerId, tuning.koBlast * maxF);
         // Blood out of the side facing the blast.
         this.events.push({
-          type: 'hit', player: r.playerId, pos: cp, strength: explosive.strength * maxF * 2,
+          type: 'hit', player: r.playerId, cause: 'blast', pos: cp, strength: explosive.strength * maxF * 2,
           entity: this.entityOfBody.get(r.chest.handle) ?? -1, local: worldToLocal(r.chest, { x: cp.x - away.x * 0.15, y: cp.y, z: cp.z - away.z * 0.15 }),
           dir: away,
         });
@@ -438,6 +463,46 @@ export class Sim {
     for (const p of this.props) push(p.body, p.body.mass());
     for (const g of this.loose) if (g.active) push(g.body, g.body.mass());
     this.events.push({ type: 'explosion', pos: c, radius: R });
+  }
+
+  // ---------------------------------------------------------------- knockouts
+
+  private addKo(id: number, amount: number) {
+    const f = this.fighters.get(id);
+    if (!f || amount <= 0) return;
+    f.hitsTaken++;
+    f.sinceHit = 0;
+    if (f.koTimer > 0) return; // already out
+    f.ko += amount;
+    if (f.ko >= tuning.koThreshold) {
+      const t = tuning;
+      f.ko = 0;
+      f.koTimer = Math.min(t.koTimeMax, t.koTime + f.koCount * t.koTimePerRepeat);
+      f.koCount++;
+      for (const i of [0, 1] as const) this.dropItem(id, i, { x: 0, y: 1, z: 0 });
+      this.events.push({ type: 'ko', player: id, seconds: f.koTimer });
+    }
+  }
+
+  private updateKnockout(id: number, r: Ragdoll, f: Fighter, input: PlayerInput) {
+    const t = tuning;
+    f.sinceHit += DT;
+    if (f.koTimer > 0) {
+      // Mashing buttons brings you round a little sooner.
+      const mash = input.handL || input.handR || input.jump;
+      if (mash && !f.mashPrev) f.koTimer -= t.koMash;
+      f.mashPrev = mash;
+      f.koTimer -= DT;
+      if (f.koTimer <= 0) {
+        f.koTimer = 0;
+        // Wake up groggy: stiffness ramps back up over the normal stun recovery.
+        r.stunTimer = t.stunTime;
+        this.events.push({ type: 'wake', player: id });
+      }
+    } else if (f.sinceHit > t.koDecayDelay) {
+      f.ko = Math.max(0, f.ko - t.koDecay * DT);
+    }
+    r.knockedOut = f.koTimer > 0;
   }
 
   private noteHit(id: number, strength: number, dir: V3) {
@@ -512,7 +577,7 @@ export class Sim {
     const lx = Math.cos(r.yaw) * 0.08 * side, lz = -Math.sin(r.yaw) * 0.08 * side;
     const origin = { x: o.x + lx, y: o.y - 0.32, z: o.z + lz };
     r.punch(i, dir);
-    const res = this.hitscan(id, origin, dir, punch.range + 0.3, punch.knockback, 1, punch.lift);
+    const res = this.hitscan(id, origin, dir, punch.range + 0.3, punch.knockback, 1, punch.lift, 'punch');
     this.events.push({ type: 'punch', player: id, to: res.point, hit: res.hit });
   }
 
@@ -601,8 +666,10 @@ export class Sim {
             const s = vr.totalMass / 10;
             vr.hit(part, { x: d.x * kb * s, y: (d.y + 0.3) * kb * s, z: d.z * kb * s }, p, kb);
             this.noteHit(vr.playerId, kb, d);
+            const head = vr.partName((part as RAPIER_NS.RigidBody).handle) === 'head';
+            this.addKo(vr.playerId, tuning.koBonk * (head ? tuning.koHeadMult : 1));
             this.events.push({
-              type: 'hit', player: vr.playerId, by: g.thrownBy, pos: { ...p }, strength: kb,
+              type: 'hit', player: vr.playerId, by: g.thrownBy, cause: 'bonk', pos: { ...p }, strength: kb,
               entity: this.entityOfBody.get((part as RAPIER_NS.RigidBody).handle) ?? -1,
               local: worldToLocal(part, p), dir: d,
             });

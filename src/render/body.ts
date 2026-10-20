@@ -34,7 +34,12 @@ const v3 = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 /** Soft shapes for each part, in the part's local frame. Sized a bit chunkier than the physics shapes. */
 function primsFor(name: PartName): Prim[] {
   switch (name) {
-    case 'pelvis': return [{ kind: 'ellipsoid', c: v3(0, 0, 0), r: v3(0.2, 0.18, 0.17) }];
+    case 'pelvis': return [
+      { kind: 'ellipsoid', c: v3(0, 0, 0), r: v3(0.2, 0.18, 0.17) },
+      // A little rounded rear.
+      { kind: 'ellipsoid', c: v3(0.07, -0.05, -0.085), r: v3(0.11, 0.105, 0.095) },
+      { kind: 'ellipsoid', c: v3(-0.07, -0.05, -0.085), r: v3(0.11, 0.105, 0.095) },
+    ];
     case 'chest': return [{ kind: 'ellipsoid', c: v3(0, -0.02, 0), r: v3(0.235, 0.26, 0.19) }];
     case 'head': return [{ kind: 'ellipsoid', c: v3(0, 0.01, 0), r: v3(0.16, 0.165, 0.16) }];
     case 'upperArmL': case 'upperArmR': return [{ kind: 'capsule', hh: 0.1, r: 0.075 }];
@@ -121,7 +126,8 @@ export function bodyGeometry() {
         for (const s of shapes) {
           const ds = partSdf(s, p);
           // Torso, hips, and head melt together more than limbs do.
-          const k = s.name === 'chest' || s.name === 'pelvis' || s.name === 'head' ? 0.07 : 0.04;
+          // Big soft fillets everywhere so the body reads as one continuous gummy piece.
+          const k = s.name === 'chest' || s.name === 'pelvis' || s.name === 'head' ? 0.11 : 0.07;
           d = d === Infinity ? ds : smin(d, ds, k);
         }
         mc.field[x + y * RES + z * RES * RES] = -d; // inside is positive
@@ -148,7 +154,8 @@ export function bodyGeometry() {
     nor[i * 3] = n.x; nor[i * 3 + 1] = n.y; nor[i * 3 + 2] = n.z;
 
     // Skin weights: each part's influence fades with distance from its own surface.
-    for (let s = 0; s < shapes.length; s++) ds[s] = Math.exp(-Math.max(0, partSdf(shapes[s], p)) / 0.025);
+    // A wide falloff spreads each joint's bend over more of the surface, so bends stay smooth.
+    for (let s = 0; s < shapes.length; s++) ds[s] = Math.exp(-Math.max(0, partSdf(shapes[s], p)) / 0.045);
     order.sort((a, b) => ds[b] - ds[a]);
     let sum = 0;
     for (let j = 0; j < 4; j++) sum += ds[order[j]];

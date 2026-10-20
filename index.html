@@ -21,6 +21,12 @@
       #hud .slot .ammo { font-size: 13px; opacity: 0.85; }
       #hud .slot.empty .name { opacity: 0.5; font-size: 15px; }
       #hud .swap { font-size: 12px; opacity: 0.8; margin-top: 4px; }
+      #debughud { position: fixed; left: 12px; top: 12px; display: none; width: 330px; padding: 8px 10px; border-radius: 10px;
+        background: #000a; color: #dfe6ff; font: 12px/1.45 ui-monospace, monospace; pointer-events: none; }
+      #debughud .p { margin: 4px 0 8px; }
+      #debughud .bar { height: 6px; margin: 3px 0; background: #fff2; border-radius: 3px; overflow: hidden; }
+      #debughud .bar i { display: block; height: 100%; background: linear-gradient(90deg, #ffd54a, #ff4a4a); }
+      #debughud .out { color: #ff6b6b; font-weight: 700; }
       #hud .stun { color: #ffd54a; font-weight: 700; }
     </style>
   </head>

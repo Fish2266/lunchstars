@@ -64,6 +64,9 @@ npm run typecheck
 ## Punches
 - A punch sets `armMode` to 'punch' for 0.2 s and steers the fist by velocity toward a point an arm's length along the aim (`servoFist`): fully out in ~4 frames, without flinging over the head. Reaching/aiming arms may accelerate `armSnap`× harder than the body.
 
+## Knockouts
+- `Fighter.ko` (meter), `koTimer`, `koCount`. `Sim.addKo` is called from hitscan (by `HitCause` and body part), explosions and bonks. While `koTimer > 0` the sim feeds the player an empty input and sets `ragdoll.knockedOut` (stiffness 0). `ko` / `wake` SimEvents; the renderer swaps the face from state each frame.
+
 ## Loose guns
 - A pool of 4 physics bodies per weapon kind (stable entity indices). Dropping/throwing enables one at the hand with the held model's transform; picking up disables it. Ammo travels with the gun.
 - `Fighter.hitAccum` sums knockback per tick; at `handling.dropThreshold` the gun is knocked loose.

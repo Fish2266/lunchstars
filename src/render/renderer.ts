@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import type { EntityDesc, ShapeDesc } from '../sim/sim';
 import { buildBody } from './body';
-import { buildFace, buildModel, gummy } from './models';
+import { buildFace, buildModel, gummy, type Face } from './models';
 
 export class Renderer {
   readonly scene = new THREE.Scene();
@@ -13,6 +13,7 @@ export class Renderer {
   meshes: THREE.Object3D[] = [];
   /** Objects not tied to one entity (skinned bodies). */
   private extra: THREE.Object3D[] = [];
+  private faces = new Map<number, Face>();
   private builtVersion = -1;
   private sun: THREE.DirectionalLight;
 
@@ -74,7 +75,11 @@ export class Renderer {
         const bone = new THREE.Bone();
         // Invisible copy of the collision shape, so the crosshair raycast can hit players.
         bone.add(new THREE.Mesh(geometryFor(e.shape), pickMat));
-        if (e.model === 'head') bone.add(buildFace(e.shape.kind === 'ball' ? e.shape.r * 1.12 : 0.16));
+        if (e.model === 'head') {
+          const face = buildFace(e.shape.kind === 'ball' ? e.shape.r * 1.12 : 0.16);
+          bone.add(face.group);
+          this.faces.set(e.playerId, face);
+        }
         let entry = bonesByPlayer.get(e.playerId);
         if (!entry) { entry = { bones: [], color: e.color }; bonesByPlayer.set(e.playerId, entry); }
         entry.bones.push(bone);
@@ -120,7 +125,13 @@ export class Renderer {
     this.sun.target.updateMatrixWorld();
   }
 
+  setKnockedOut(playerId: number, on: boolean) {
+    this.faces.get(playerId)?.setKnockedOut(on);
+  }
+
   render() {
+    const t = performance.now() / 1000;
+    for (const f of this.faces.values()) f.animate(t);
     this.gl.render(this.scene, this.camera);
   }
 }

@@ -121,23 +121,72 @@ function head(radius: number, color: number) {
   return g;
 }
 
-/** Eyes, shine and smile for the one-piece body's head bone (face points down +Z). */
-export function buildFace(r: number) {
-  const g = new THREE.Group();
+const STAR = new THREE.MeshBasicMaterial({ color: 0xffe14a });
+
+export interface Face {
+  group: THREE.Group;
+  /** Swap to knocked-out eyes and show the circling stars. */
+  setKnockedOut(on: boolean): void;
+  animate(time: number): void;
+}
+
+/** Eyes, shine and smile for the one-piece body's head bone (face points down +Z), plus knockout eyes and stars. */
+export function buildFace(r: number): Face {
+  const group = new THREE.Group();
+  const awake = new THREE.Group();
+  const out = new THREE.Group();
   for (const side of [-1, 1]) {
     const eye = new THREE.Mesh(new THREE.SphereGeometry(r * 0.17, 12, 10), EYE);
     eye.position.set(side * r * 0.34, r * 0.18, r * 0.9);
     eye.scale.set(0.85, 1.2, 0.55);
-    g.add(eye);
+    awake.add(eye);
     const shine = new THREE.Mesh(new THREE.SphereGeometry(r * 0.05, 8, 6), EYE_SHINE);
     shine.position.set(side * r * 0.34 + r * 0.04, r * 0.26, r * 0.99);
-    g.add(shine);
+    awake.add(shine);
+    // Knocked out: X eyes.
+    for (const a of [Math.PI / 4, -Math.PI / 4]) {
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(r * 0.36, r * 0.07, r * 0.06), EYE);
+      bar.position.set(side * r * 0.34, r * 0.18, r * 0.95);
+      bar.rotation.z = a;
+      out.add(bar);
+    }
   }
   const mouth = new THREE.Mesh(new THREE.TorusGeometry(r * 0.18, r * 0.03, 6, 12, Math.PI), EYE);
   mouth.position.set(0, -r * 0.24, r * 0.94);
   mouth.rotation.z = Math.PI;
-  g.add(mouth);
-  return g;
+  awake.add(mouth);
+  // Knocked out: a little "o" mouth.
+  const o = new THREE.Mesh(new THREE.TorusGeometry(r * 0.09, r * 0.03, 6, 12), EYE);
+  o.position.set(0, -r * 0.26, r * 0.95);
+  out.add(o);
+
+  // Stars circling above the head. They stay level even when the head is on its side.
+  const stars = new THREE.Group();
+  const starGeo = new THREE.OctahedronGeometry(r * 0.16, 0);
+  for (let i = 0; i < 4; i++) {
+    const st = new THREE.Mesh(starGeo, STAR);
+    const a = (i / 4) * Math.PI * 2;
+    st.position.set(Math.cos(a) * r * 1.3, 0, Math.sin(a) * r * 1.3);
+    stars.add(st);
+  }
+  out.add(stars);
+  out.visible = false;
+  group.add(awake, out);
+  const up = new THREE.Vector3();
+  const q = new THREE.Quaternion();
+  return {
+    group,
+    setKnockedOut(on) { awake.visible = !on; out.visible = on; },
+    animate(time) {
+      if (!out.visible) return;
+      // Place the ring above the head in world-up, whatever way the head is facing.
+      group.getWorldQuaternion(q).invert();
+      up.set(0, r * 1.5, 0).applyQuaternion(q);
+      stars.position.copy(up);
+      stars.quaternion.copy(q).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), time * 4));
+      for (const st of stars.children) st.rotation.y = time * 6;
+    },
+  };
 }
 
 function capsule(r: number, len: number, m: THREE.Material) {

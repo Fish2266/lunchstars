@@ -67,7 +67,6 @@ export class Menu {
     this.root.innerHTML = `
       <div class="card">
         <h1>LUNCH STARS</h1>
-        <p>Knock everyone off the cafeteria. Guns optional, chaos mandatory.</p>
         <button class="big" data-play>Click to play</button>
         <button class="plain" data-settings>Controls &amp; settings</button>
         <div class="hint">Press Esc any time to come back here.</div>

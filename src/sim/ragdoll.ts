@@ -127,6 +127,8 @@ export class Ragdoll {
   grounded = false;
   stunTimer = 0;
   staggerTimer = 0;
+  /** Set by the sim: fully limp, no control at all. */
+  knockedOut = false;
   stiffness = 1;
   private walkAmount = 0;
   private jumpCooldown = 0;
@@ -252,6 +254,30 @@ export class Ragdoll {
     this.punchDir[i] = { ...dir };
   }
 
+  /** Seconds left pulling an arm back down after a punch. */
+  private retract: [number, number] = [0, 0];
+
+  /** Match the arm's motion to the chest's, removing any swing of its own. */
+  private settleArm(i: 0 | 1) {
+    const cv = this.chest.linvel(), ca = this.chest.angvel();
+    for (const n of i === 0 ? ['upperArmL', 'forearmL'] as const : ['upperArmR', 'forearmR'] as const) {
+      const b = this.parts.get(n)!.body;
+      b.setLinvel(cv, true);
+      b.setAngvel(ca, true);
+    }
+  }
+
+  /** Bleed off an arm's swing (relative to the chest) by `f` per tick, so a dropped arm settles instead of pendulum-swinging. */
+  private dampArm(i: 0 | 1, f: number) {
+    const ca = this.chest.angvel(), cv = this.chest.linvel();
+    for (const n of i === 0 ? ['upperArmL', 'forearmL'] as const : ['upperArmR', 'forearmR'] as const) {
+      const b = this.parts.get(n)!.body;
+      const a = b.angvel(), v = b.linvel();
+      b.setAngvel({ x: a.x + (ca.x - a.x) * f, y: a.y + (ca.y - a.y) * f, z: a.z + (ca.z - a.z) * f }, true);
+      b.setLinvel({ x: v.x + (cv.x - v.x) * f, y: v.y + (cv.y - v.y) * f, z: v.z + (cv.z - v.z) * f }, true);
+    }
+  }
+
   private punchDir: [{ x: number; y: number; z: number } | null, { x: number; y: number; z: number } | null] = [null, null];
 
   /**
@@ -273,6 +299,12 @@ export class Ragdoll {
     const v = fore.linvel();
     const m = fore.mass() * k;
     fore.applyImpulseAtPoint({ x: (cv.x + vx - v.x) * m, y: (cv.y + vy - v.y) * m, z: (cv.z + vz - v.z) * m }, hand, true);
+  }
+
+  /** Which body part a rigid body is. */
+  partName(handle: number): PartName | null {
+    for (const [n, p] of this.parts) if (p.body.handle === handle) return n;
+    return null;
   }
 
   /** World positions of both hands. */
@@ -321,7 +353,7 @@ export class Ragdoll {
 
     // --- Stun / stiffness ---
     this.stunTimer = Math.max(0, this.stunTimer - dt);
-    this.stiffness = clamp(1 - this.stunTimer / t.stunTime, t.stunFloor, 1);
+    this.stiffness = this.knockedOut ? 0 : clamp(1 - this.stunTimer / t.stunTime, t.stunFloor, 1);
     const k = this.stiffness;
 
     // --- Ground probe ---
@@ -546,8 +578,9 @@ export class Ragdoll {
       const mode = this.armMode[i];
       if (mode === 'idle') {
         // Loose: swing opposite the legs, mostly flopping around with the body.
+        // Just after a punch it's held a bit firmer so it comes back down instead of drifting.
         const arm = t.armSwing * stride * side;
-        const ka = k * t.idleArmGain;
+        const ka = k * (this.retract[i] > 0 ? 1 : t.idleArmGain);
         this.drive(upper, mul(_qYaw, mul(rot(X_AXIS, arm), rot(Z_AXIS, 0.2 * side))), ka);
         this.drive(fore, mul(_qYaw, rot(X_AXIS, arm - 0.45)), ka);
         continue;
@@ -562,7 +595,16 @@ export class Ragdoll {
       this.holdUp(fore, k, this.chest);
       if (mode === 'punch' && this.punchDir[i]) this.servoFist(i as 0 | 1, k);
     }
-    for (let i = 0; i < 2; i++) if (this.armMode[i] !== 'punch') this.punchDir[i] = null;
+    for (let i = 0; i < 2; i++) {
+      if (this.armMode[i] !== 'punch' && this.punchDir[i]) {
+        // Punch over: kill the arm's leftover swing so it doesn't fling up past the head, then let it drop.
+        this.punchDir[i] = null;
+        this.settleArm(i as 0 | 1);
+        this.retract[i] = 0.35;
+      }
+      if (this.retract[i] > 0) this.dampArm(i as 0 | 1, 0.15);
+      this.retract[i] = Math.max(0, this.retract[i] - dt);
+    }
 
     this.updateGrab([this.armMode[0] === 'reach' && k > 0.3, this.armMode[1] === 'reach' && k > 0.3]);
   }

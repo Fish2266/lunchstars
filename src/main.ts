@@ -8,7 +8,7 @@ import { createDebugPanel, loadSavedTuning } from './client/debug';
 import { Effects } from './render/effects';
 import { Renderer } from './render/renderer';
 import type { PlayerInput } from './sim/input';
-import { DT, Sim } from './sim/sim';
+import { DT, PLAYER_COLORS, Sim } from './sim/sim';
 import { tuning } from './sim/tuning';
 import { explosive, handling, punch, weapons, type WeaponKind } from './sim/weapons';
 import { Gore, goreSettings } from './render/gore';
@@ -92,6 +92,23 @@ async function main() {
   hf.add(handling, 'throwKnockback', 0, 30, 0.5).name('thrown gun bonk');
   hf.add(handling, 'grabReach', 0.1, 1, 0.01).name('grab reach');
   hf.close();
+  // Debug-only HUD: knockout meters and timers for everyone. Never shown in normal play.
+  const debugHud = document.createElement('div');
+  debugHud.id = 'debughud';
+  document.body.appendChild(debugHud);
+  const debugOpts = { showHud: false };
+  gui.add(debugOpts, 'showHud').name('Debug HUD (KO, stats)');
+  const ko = gui.addFolder('Knockouts');
+  ko.add(tuning, 'koThreshold', 20, 300, 5).name('KO at');
+  ko.add(tuning, 'koPunch', 0, 60, 1).name('per punch');
+  ko.add(tuning, 'koHeadMult', 1, 4, 0.1).name('head multiplier');
+  ko.add(tuning, 'koShot', 0, 40, 1).name('per shot');
+  ko.add(tuning, 'koBonk', 0, 80, 1).name('thrown-gun bonk');
+  ko.add(tuning, 'koBlast', 0, 200, 5).name('explosion');
+  ko.add(tuning, 'koDecay', 0, 60, 1).name('drain / s');
+  ko.add(tuning, 'koTime', 0.5, 12, 0.5).name('KO seconds');
+  ko.add(tuning, 'koMash', 0, 0.5, 0.01).name('mash cuts');
+  ko.close();
   const gf = gui.addFolder('Gore');
   gf.add(goreSettings, 'mode', ['blood', 'ketchup & mustard', 'off']);
   gf.add(goreSettings, 'amount', 0, 3, 0.05);
@@ -222,7 +239,27 @@ async function main() {
       el.classList.toggle('active', !!h.item && f.active === i);
       el.classList.toggle('empty', !h.item);
     }
-    hud.stun.textContent = (both ? `${keyFor('cycle')} to switch hands   ` : '') + (me.stiffness < 0.9 ? 'STUNNED' : '');
+    hud.stun.textContent = both ? `${keyFor('cycle')} to switch hands` : '';
+
+    // Knocked-out faces, and the debug HUD.
+    for (const [id, ft] of sim.fighters) renderer.setKnockedOut(id, ft.koTimer > 0);
+    debugHud.style.display = debugOpts.showHud ? 'block' : 'none';
+    if (debugOpts.showHud) {
+      let html = '';
+      for (const [id, ft] of sim.fighters) {
+        const r = sim.players.get(id)!;
+        const color = '#' + PLAYER_COLORS[ft.slot % PLAYER_COLORS.length].toString(16).padStart(6, '0');
+        const pct = Math.min(100, (ft.ko / tuning.koThreshold) * 100);
+        const items = ft.hands.map((h) => h.item ? `${h.item}(${h.ammo})` : '–').join(' / ');
+        html += `<div class="p"><b style="color:${color}">${id === LOCAL_ID ? 'You' : 'Dummy'}</b>`
+          + (ft.koTimer > 0 ? ` <span class="out">KO ${ft.koTimer.toFixed(1)}s</span>` : '')
+          + `<div class="bar"><i style="width:${pct}%"></i></div>`
+          + `KO meter ${ft.ko.toFixed(0)}/${tuning.koThreshold} · KOs ${ft.koCount} · hits ${ft.hitsTaken}<br>`
+          + `stiffness ${r.stiffness.toFixed(2)} · stun ${r.stunTimer.toFixed(2)}s · stagger ${r.staggerTimer.toFixed(2)}s · ${r.grounded ? 'grounded' : 'airborne'}<br>`
+          + `hands ${items} · active ${ft.active === 0 ? 'L' : 'R'}</div>`;
+      }
+      if (debugHud.innerHTML !== html) debugHud.innerHTML = html;
+    }
 
     fpsFrames++; fpsTime += frameDt;
     if (fpsTime > 0.5) { stats.fps = Math.round(fpsFrames / fpsTime); fpsFrames = 0; fpsTime = 0; }
@@ -235,7 +272,7 @@ async function main() {
   requestAnimationFrame(frame);
 
   // Exposed for debugging in the console.
-  Object.assign(window, { sim, tuning, weapons, explosive, bot, effects, gore, goreSettings, handling });
+  Object.assign(window, { sim, tuning, weapons, explosive, bot, effects, gore, goreSettings, handling, debugOpts });
 }
 
 main();

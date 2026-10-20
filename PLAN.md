@@ -56,6 +56,12 @@ Gang Beasts PC uses one input per hand (tap = punch, hold = grab). We use:
 - Characters render as one seamless glossy gummy mesh each (skinned to the physics parts), with mitten hands, feet and a face. Physics bodies are unchanged.
 - Punches snap out in ~4 frames; held hands come up in ~4 frames. Switch hands defaults to M.
 
+## Knockouts (done)
+- Hidden KO meter per player. Punch 16 (head ×2.2), shots scale with knockback (head ×1.5), thrown-gun bonk 25, explosions up to 80. Drains 14/s after 1.2 s without a hit.
+- At 100: knocked out ~4 s (+1 s per earlier KO this life, max 8): fully limp, drops items, X eyes + circling stars, can be dragged/thrown. Mashing hand/jump keys shortens it a little. Wakes groggy (stiffness ramps back).
+- Debug HUD (panel → "Debug HUD (KO, stats)") shows meters/timers; not shown in normal play. KO numbers are in the panel's Knockouts folder.
+- Blood only from guns and explosions; droplets re-check the ground as they fly, so no puddles over the pit.
+
 ## Known feel issues / tuning backlog
 - Grab reach takes ~0.8 s; consider stronger arm gains while grabbing.
 - One-handed lifting of a 20 kg crate doesn't work; two hands + stronger arms, or lighter props.
