@@ -206,6 +206,8 @@ export function buildModel(e: EntityDesc): THREE.Object3D {
     case 'belt': g = belt(s.kind === 'box' ? s : { hx: 1, hy: 0.2, hz: 3 }, e.flow ?? { x: 0, z: -1 }); break;
     case 'rail': g = railing(s.kind === 'box' ? s : { hx: 0.5, hy: 0.4, hz: 0.04 }); break;
     case 'stamper': g = stamper(s.kind === 'box' ? s : { hx: 0.75, hy: 0.28, hz: 1.05 }); break;
+    case 'barrel': g = barrel(s.kind === 'cylinder' ? s : { hh: 0.42, r: 0.3 }); break;
+    case 'sign': g = sign(s.kind === 'box' ? s : { hx: 1, hy: 0.3, hz: 0.03 }, e.color, e.label ?? '', !!e.labelOnTop); break;
     case 'head': g = head(s.kind === 'ball' ? s.r : 0.14, e.color); break;
     case 'torso': {
       // A round bean instead of a box, overlapping the hips so the body reads as one blob.
@@ -307,6 +309,55 @@ function stamper(b: { hx: number; hy: number; hz: number }) {
   rod.position.y = b.hy + 1.6;
   g.add(rod);
   return g;
+}
+
+/** Red oil drum with dark hoops and a hazard band. */
+const BARREL_RED = mat(0xc0392b, { roughness: 0.45, metalness: 0.3 });
+function barrel(c: { hh: number; r: number }) {
+  const g = new THREE.Group();
+  g.add(new THREE.Mesh(new THREE.CylinderGeometry(c.r, c.r, c.hh * 2, 22), BARREL_RED));
+  for (const y of [-c.hh * 0.55, c.hh * 0.55]) {
+    const hoop = new THREE.Mesh(new THREE.TorusGeometry(c.r + 0.005, 0.018, 6, 24).rotateX(Math.PI / 2), DARK);
+    hoop.position.y = y;
+    g.add(hoop);
+  }
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(c.r + 0.004, c.r + 0.004, 0.16, 22, 1, true), surfaceMaterial('hazard', 0xffffff));
+  g.add(band);
+  for (const y of [-c.hh, c.hh]) {
+    const lid = new THREE.Mesh(new THREE.CylinderGeometry(c.r * 0.96, c.r * 0.96, 0.02, 22), DARK);
+    lid.position.y = y;
+    g.add(lid);
+  }
+  return g;
+}
+
+/** A painted sign: the box in its colour, with stencilled text on the front (or on top, for floor stencils). */
+function sign(b: { hx: number; hy: number; hz: number }, color: number, label: string, onTop: boolean) {
+  const w = (b.hx * 2), h = onTop ? b.hz * 2 : b.hy * 2;
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = Math.max(64, Math.round((512 * h) / w));
+  const x = c.getContext('2d')!;
+  const col = '#' + color.toString(16).padStart(6, '0');
+  if (onTop) {
+    x.clearRect(0, 0, c.width, c.height); // floor stencil: paint only, no plate
+  } else {
+    x.fillStyle = col; x.fillRect(0, 0, c.width, c.height);
+    x.strokeStyle = '#1d1d1f'; x.lineWidth = 10; x.strokeRect(5, 5, c.width - 10, c.height - 10);
+  }
+  x.fillStyle = onTop ? col : '#1d1d1f';
+  x.font = `900 ${Math.floor(c.height * 0.62)}px Impact, "Arial Black", system-ui, sans-serif`;
+  x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.fillText(label, c.width / 2, c.height / 2 + c.height * 0.04, c.width * 0.9);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  const face = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7, transparent: onTop, polygonOffset: onTop, polygonOffsetFactor: -1 });
+  const plain = onTop ? new THREE.MeshBasicMaterial({ visible: false }) : mat(color, { roughness: 0.7, metalness: 0 });
+  // Box faces: +x, -x, +y, -y, +z, -z.
+  const mats = onTop ? [plain, plain, face, plain, plain, plain] : [plain, plain, plain, plain, face, plain];
+  const m = new THREE.Mesh(new THREE.BoxGeometry(b.hx * 2, b.hy * 2, b.hz * 2), mats);
+  m.receiveShadow = true;
+  return m;
 }
 
 /** Pit railing section: two posts and two bars (the collider is a simple panel). */

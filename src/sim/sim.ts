@@ -14,7 +14,8 @@ export const DT = 1 / TICK_RATE;
 export type ShapeDesc =
   | { kind: 'box'; hx: number; hy: number; hz: number }
   | { kind: 'ball'; r: number }
-  | { kind: 'capsule'; hh: number; r: number };
+  | { kind: 'capsule'; hh: number; r: number }
+  | { kind: 'cylinder'; hh: number; r: number };
 
 /** Static description of something the renderer should draw. Transforms come separately. */
 export interface EntityDesc {
@@ -32,9 +33,13 @@ export interface EntityDesc {
   flow?: { x: number; z: number };
   /** Procedural texture for level geometry. */
   surface?: Surface;
+  /** Text painted on a sign (on its +z face, or its top for floor stencils). */
+  label?: string;
+  /** For signs: paint the text on the top face (floor stencil) instead of the front. */
+  labelOnTop?: boolean;
 }
 
-export type ModelKind = WeaponKind | 'grenadeLive' | 'head' | 'torso' | 'hips' | 'limb' | 'forearm' | 'shin' | 'belt' | 'rail' | 'stamper';
+export type ModelKind = WeaponKind | 'grenadeLive' | 'head' | 'torso' | 'hips' | 'limb' | 'forearm' | 'shin' | 'belt' | 'rail' | 'stamper' | 'barrel' | 'sign';
 
 export type V3 = { x: number; y: number; z: number };
 export type HitCause = 'punch' | 'shot' | 'pellet' | 'blast' | 'bonk' | 'shove' | 'flame' | 'stamp';
@@ -203,6 +208,8 @@ export class Sim {
   private gunTimer = 1.5;
   /** Stamping presses (kinematic heads) and the cycle phase each is in. */
   readonly stampers: { body: RAPIER_NS.RigidBody; x: number; z: number; offset: number; phase: StamperPhase; hit: Set<number> }[] = [];
+  /** Explosive barrels: shoot them, burn them or blast them and they go off. */
+  private barrels: { body: RAPIER_NS.RigidBody; collider: RAPIER_NS.Collider; hp: number; fuse: number; respawn: number; spawn: V3 }[] = [];
   /** Breakable pit railing sections. */
   private rails: { body: RAPIER_NS.RigidBody; collider: RAPIER_NS.Collider; broken: boolean; hp: number; pos: V3 }[] = [];
   readonly furnace = { state: 'idle' as FurnaceState, timer: 8, hit: new Set<number>() };
@@ -309,6 +316,7 @@ export class Sim {
     this.furnace.state = 'idle';
     this.furnace.timer = tuning.furnaceEvery;
     for (const r of this.rails) this.repairRail(r);
+    for (const b of this.barrels) this.resetBarrel(b);
   }
 
   step(inputs: ReadonlyMap<number, PlayerInput>) {
@@ -513,7 +521,7 @@ export class Sim {
           entity: this.entityOfBody.get(caught.body.handle) ?? -1, local: { x: 0, y: 0.05, z: 0 }, dir: { x: 0, y: 1, z: 0 },
         });
       }
-      for (const b of [...this.loose.filter((g) => g.active).map((g) => g.body), ...this.beltCrates.filter((c) => c.active).map((c) => c.body), ...this.props.map((p) => p.body)]) {
+      for (const b of [...this.loose.filter((g) => g.active).map((g) => g.body), ...this.beltCrates.filter((c) => c.active).map((c) => c.body), ...this.props.map((p) => p.body), ...this.barrels.filter((x) => x.respawn === 0).map((x) => x.body)]) {
         if (st.hit.has(-1 - b.handle) || !under(b.translation())) continue;
         st.hit.add(-1 - b.handle);
         const d = away(b.translation());
@@ -557,6 +565,8 @@ export class Sim {
     for (const p of this.props) push(p.body);
     for (const c of this.beltCrates) if (c.active) push(c.body);
     for (const g of this.loose) if (g.active) push(g.body);
+    for (const b of this.barrels) if (b.respawn === 0) push(b.body);
+    this.updateBarrels();
 
     if (this.match.phase !== 'countdown') {
       // Guns only ever arrive on the belts, riding toward the fire.
@@ -648,7 +658,7 @@ export class Sim {
           entity: this.entityOfBody.get(r.chest.handle) ?? -1, local: { x: 0, y: 0, z: 0 }, dir: { x: ox, y: 0.5, z: oz },
         });
       }
-      for (const b of [...this.props.map((p) => p.body), ...this.beltCrates.filter((x) => x.active).map((x) => x.body)]) {
+      for (const b of [...this.props.map((p) => p.body), ...this.beltCrates.filter((x) => x.active).map((x) => x.body), ...this.barrels.filter((x) => x.respawn === 0).map((x) => x.body)]) {
         if (fu.hit.has(-1 - b.handle) || !inBox(b.translation(), map.flare)) continue;
         fu.hit.add(-1 - b.handle);
         b.applyImpulse({ x: 0, y: 6 * b.mass(), z: 0 }, true);
@@ -704,6 +714,68 @@ export class Sim {
     r.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
     r.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     r.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+  }
+
+  private updateBarrels() {
+    for (const b of this.barrels) {
+      if (b.respawn > 0) {
+        b.respawn -= DT;
+        if (b.respawn <= 0) { b.respawn = 0; this.resetBarrel(b); }
+        continue;
+      }
+      // Into the fire: instant boom.
+      if (inBox(b.body.translation(), INCINERATOR.fire)) b.fuse = Math.max(0.01, Math.min(b.fuse || 0.01, 0.01));
+      if (b.fuse > 0) {
+        b.fuse -= DT;
+        if (b.fuse <= 0) {
+          const p = { ...b.body.translation() };
+          for (const r of this.players.values()) r.releaseIfAttachedTo(b.body.handle);
+          b.body.setEnabled(false);
+          b.body.setTranslation({ x: 0, y: HIDDEN_Y, z: 0 }, false);
+          b.respawn = tuning.barrelRespawn;
+          b.fuse = 0;
+          this.explode(p);
+        }
+      }
+    }
+  }
+
+  private damageBarrel(b: (typeof this.barrels)[number], amount: number) {
+    if (b.respawn > 0 || b.fuse > 0) return;
+    b.hp -= amount;
+    if (b.hp <= 0) b.fuse = 0.15;
+  }
+
+  private addBarrel(pos: V3) {
+    const body = this.world.createRigidBody(this.R.RigidBodyDesc.dynamic().setTranslation(pos.x, pos.y, pos.z).setAngularDamping(0.5));
+    const collider = this.world.createCollider(
+      this.R.ColliderDesc.cylinder(0.42, 0.3).setDensity(150).setFriction(0.7).setCollisionGroups(groups(WORLD_GROUP, 0xffff)),
+      body,
+    );
+    this.barrels.push({ body, collider, hp: tuning.barrelHp, fuse: 0, respawn: 0, spawn: { ...pos } });
+    this.addEntity(body, { kind: 'cylinder', hh: 0.42, r: 0.3 }, 0xc0392b, 'prop', undefined, 'barrel');
+  }
+
+  private resetBarrel(b: (typeof this.barrels)[number]) {
+    for (const r of this.players.values()) r.releaseIfAttachedTo(b.body.handle);
+    b.hp = tuning.barrelHp;
+    b.fuse = 0;
+    b.respawn = 0;
+    b.body.setEnabled(true);
+    b.body.setTranslation(b.spawn, true);
+    b.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
+    b.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    b.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+  }
+
+  private addSign(pos: V3, half: V3, color: number, label: string, onTop: boolean) {
+    // Signs are scenery: a thin static box with text painted on.
+    const body = this.world.createRigidBody(this.R.RigidBodyDesc.fixed().setTranslation(pos.x, pos.y, pos.z));
+    this.world.createCollider(this.R.ColliderDesc.cuboid(half.x, half.y, half.z).setCollisionGroups(groups(WORLD_GROUP, 0xffff)), body);
+    this.addEntity(body, { kind: 'box', hx: half.x, hy: half.y, hz: half.z }, color, 'static', undefined, 'sign');
+    const e = this.entities[this.entities.length - 1];
+    e.label = label;
+    e.labelOnTop = onTop;
   }
 
   private buildBeltCrates() {
@@ -808,6 +880,8 @@ export class Sim {
       return { hit: true, point };
     }
     if (!body || !body.isDynamic()) return { hit: false, point };
+    const barrel = this.barrels.find((b) => b.collider.handle === hit.collider.handle);
+    if (barrel) this.damageBarrel(barrel, knockback);
     const strength = knockback * (1 + (falloff - 1) * (hit.timeOfImpact / range));
     const imp = { x: dir.x * strength, y: dir.y * strength + strength * lift, z: dir.z * strength };
     const owner = [...this.players.values()].find((r) => r.ownsCollider(hit.collider));
@@ -941,6 +1015,13 @@ export class Sim {
     }
     for (const p of this.props) push(p.body, p.body.mass());
     for (const g of this.loose) if (g.active) push(g.body, g.body.mass());
+    // Chain reaction: nearby barrels go off a moment later.
+    for (const b of this.barrels) {
+      if (b.respawn > 0 || b.fuse > 0) continue;
+      const p = b.body.translation();
+      if (Math.hypot(p.x - c.x, p.y - c.y, p.z - c.z) < R * 0.85) b.fuse = 0.25;
+      else push(b.body, b.body.mass());
+    }
     this.events.push({ type: 'explosion', pos: c, radius: R });
   }
 
@@ -1350,6 +1431,8 @@ export class Sim {
       box: (pos, half, color, opts) => this.addStatic(pos, half, color, opts),
       crate: (pos, size, color) => this.addCrate(pos, size, color),
       rail: (pos, half, color) => this.addRail(pos, half, color),
+      barrel: (pos) => this.addBarrel(pos),
+      sign: (pos, half, color, label, onTop) => this.addSign(pos, half, color, label, onTop ?? false),
     });
     this.spawns = INCINERATOR.spawns;
   }

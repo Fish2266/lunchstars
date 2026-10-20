@@ -75,6 +75,9 @@ A factory floor around a central fire pit.
 - Pit flare (survivable hazard): every 11 s it glows/embers for 1.4 s, then erupts — blasts anyone near the rim up and outward, +40 KO.
 - Raised platforms in the back corners, reached by solid ramps (with a curb), joined by a catwalk bridge over the back belt.
 - Stamping presses over the left and right belts: they shudder, slam onto the belt, hold, rise (4.6 s cycle, out of phase). Anyone underneath is blasted aside (+55 KO, blood); guns and crates get knocked off the belt. Guns ride under them on the way to the pit.
+- Explosive barrels (4, one up on a platform): two pistol hits, a fall into the pit, or a nearby blast sets them off (chain reactions). Grab and carry them. Respawn after 18 s and every round.
+- Press beacons: a red light on each gantry blinks while the press shudders and glows while it slams.
+- Atmosphere: embers drifting out of the pit, smoke wisps into the hood (lit from below), factory signs on the back wall ("INCINERATOR 3", "NO HORSEPLAY", "WASH HANDS") and a DANGER stencil in front of the pit.
 - Look: tiled concrete floor, brick back wall, metal grating, brushed-metal walls, hazard-striped press heads (procedural textures at world scale); hanging factory lamps with warm spotlights. Nothing outside the walls but darkness.
 - Rounds: 3-2-1 countdown, last one standing, first to 3, rematch with Jump. KO escalation resets each round. Practice mode in the panel.
 - Carrying: anything you hold (a KO'd player, a crate) is partly lifted and pulled along with you.

@@ -89,6 +89,24 @@ export class Effects {
   }
 
   private smokers: { entity: number; t: number; acc: number }[] = [];
+  private emberAcc = 0;
+  private wispAcc = 0;
+  private emberGeo = new THREE.SphereGeometry(1, 5, 4);
+
+  /** A tiny glowing spark that floats up, wanders and fades. */
+  private ember(center: V3, half: number) {
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffb347, transparent: true, depthWrite: false });
+    const m = new THREE.Mesh(this.emberGeo, mat);
+    const start = { x: center.x + (Math.random() - 0.5) * half * 2, y: center.y - 0.8, z: center.z + (Math.random() - 0.5) * half * 2 };
+    const vy = 1.2 + Math.random() * 1.6, sway = Math.random() * 6, life = 1.8 + Math.random() * 1.6;
+    const size = 0.015 + Math.random() * 0.02;
+    this.add(m, life, (t) => {
+      const s = t * life;
+      m.position.set(start.x + Math.sin(s * 2 + sway) * 0.3, start.y + vy * s, start.z + Math.cos(s * 1.7 + sway) * 0.3);
+      m.scale.setScalar(size);
+      mat.opacity = (1 - t) * (0.6 + 0.4 * Math.sin(s * 20 + sway));
+    });
+  }
   private smokeMat = new THREE.MeshLambertMaterial({ color: 0x8a8a8a, transparent: true, depthWrite: false });
   private jetAcc = 0;
 
@@ -110,6 +128,15 @@ export class Effects {
       }
     }
     if (furnace) {
+      // Ambience: embers drifting up out of the pit, and the odd wisp of smoke rising into the hood.
+      this.emberAcc += dt * 16;
+      while (this.emberAcc >= 1) { this.emberAcc -= 1; this.ember(furnace.center, furnace.half); }
+      this.wispAcc += dt * 1.6;
+      while (this.wispAcc >= 1) {
+        this.wispAcc -= 1;
+        const c = furnace.center;
+        this.smokePuff({ x: c.x + (Math.random() - 0.5) * furnace.half, y: c.y + 0.4, z: c.z + (Math.random() - 0.5) * furnace.half }, 0.35, 3.2);
+      }
       // Idle: flames licking up out of the pit. Warning: more of them. Burst: a column erupting.
       const burst = furnace.state === 'burst';
       this.jetAcc += dt * (burst ? 90 : furnace.state === 'warn' ? 30 : 12);

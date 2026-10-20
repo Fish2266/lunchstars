@@ -109,6 +109,8 @@ export const tuning = {
   stamperPeriod: 4.6, // seconds per press cycle (up, shudder, slam, hold, rise)
   stamperPush: 7, // m/s sideways out from under the press
   stamperKo: 55,
+  barrelHp: 30, // knockback a barrel soaks before it goes off
+  barrelRespawn: 18, // seconds (rounds also reset them)
 
   // World.
   gravity: -18,

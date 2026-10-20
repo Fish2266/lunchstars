@@ -771,6 +771,7 @@ function shapeToCollider(R: R, s: ShapeDesc): RAPIER_NS.ColliderDesc {
     case 'box': return R.ColliderDesc.cuboid(s.hx, s.hy, s.hz);
     case 'ball': return R.ColliderDesc.ball(s.r);
     case 'capsule': return R.ColliderDesc.capsule(s.hh, s.r);
+    case 'cylinder': return R.ColliderDesc.cylinder(s.hh, s.r);
   }
 }
 

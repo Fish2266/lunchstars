@@ -227,6 +227,7 @@ async function main() {
     }
     effects.update(frameDt, transforms, { state: sim.furnace.state, center: INCINERATOR.pitCenter, half: INCINERATOR.pitHalf });
     renderer.setFurnace(sim.furnace.state);
+    renderer.setStampers(sim.stampers);
     matchHud.update(realDt);
     gore.update(frameDt, transforms);
     animateModels(now / 1000);

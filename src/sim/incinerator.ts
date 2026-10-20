@@ -28,6 +28,10 @@ export interface ArenaBuilder {
   crate(pos: V3, size: number, color: number): void;
   /** A breakable railing section: solid until a hard hit, then it falls loose. */
   rail(pos: V3, half: V3, color: number): void;
+  /** An explosive barrel. */
+  barrel(pos: V3): void;
+  /** A painted sign (text on the +z face, or on top for a floor stencil). */
+  sign(pos: V3, half: V3, color: number, label: string, onTop?: boolean): void;
 }
 
 export interface Belt {
@@ -184,7 +188,21 @@ export function buildIncinerator(b: ArenaBuilder) {
 
   // ---------------------------------------------------------------- hood above the pit (scenery)
   b.box({ x: 0, y: 6.6, z: 0 }, { x: 2.6, y: 0.25, z: 2.6 }, C.iron);
+  b.box({ x: 0, y: 6.33, z: 0 }, { x: 2.45, y: 0.02, z: 2.45 }, C.fire, { emissive: 0.35 }); // underside lit by the fire
   b.box({ x: 0, y: 8.2, z: 0 }, { x: 0.9, y: 1.4, z: 0.9 }, C.rust);
+
+  // ---------------------------------------------------------------- explosive barrels
+  b.barrel({ x: -7.6, y: 0.43, z: 5.9 });
+  b.barrel({ x: 7.5, y: 0.43, z: -2.3 });
+  b.barrel({ x: 3.3, y: 0.43, z: -6.6 });
+  b.barrel({ x: -6.4, y: 2.23, z: -7.4 }); // up on the left platform
+
+  // ---------------------------------------------------------------- signs
+  const wallZ = -8.0 + 0.03;
+  b.sign({ x: 0, y: 3.0, z: wallZ }, { x: 1.9, y: 0.42, z: 0.03 }, 0xe3b21b, 'INCINERATOR 3');
+  b.sign({ x: -4.5, y: 3.0, z: wallZ }, { x: 1.2, y: 0.3, z: 0.03 }, 0xd8d8d0, 'NO HORSEPLAY');
+  b.sign({ x: 4.5, y: 3.0, z: wallZ }, { x: 1.2, y: 0.3, z: 0.03 }, 0xd8d8d0, 'WASH HANDS');
+  b.sign({ x: 0, y: 0.009, z: 3.1 }, { x: 1.3, y: 0.004, z: 0.45 }, 0xe3b21b, 'DANGER', true);
 
   // ---------------------------------------------------------------- loose crates
   b.crate({ x: -6.5, y: 0.4, z: 4.5 }, 0.35, C.crate);

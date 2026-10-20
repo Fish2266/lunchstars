@@ -21,6 +21,24 @@ export class Renderer {
   setFurnace(state: 'idle' | 'warn' | 'burst') {
     this.furnaceState = state;
   }
+
+  /** Red warning beacons on top of each press gantry: blink while it shudders, solid while it slams. */
+  private beacons: { mat: THREE.MeshStandardMaterial; light: THREE.PointLight; phase: string }[] = [];
+  setStampers(list: { x: number; z: number; phase: string }[]) {
+    while (this.beacons.length < list.length) {
+      const st = list[this.beacons.length];
+      const mat = new THREE.MeshStandardMaterial({ color: 0x5a1010, emissive: 0xff2a1a, emissiveIntensity: 0.2, roughness: 0.3 });
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), mat);
+      const base = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.06, 12), new THREE.MeshStandardMaterial({ color: 0x222222 }));
+      dome.position.set(st.x, 3.97, st.z);
+      base.position.set(st.x, 3.97, st.z);
+      const light = new THREE.PointLight(0xff3020, 0, 6, 1.6);
+      light.position.set(st.x, 4.1, st.z);
+      this.scene.add(dome, base, light);
+      this.beacons.push({ mat, light, phase: 'up' });
+    }
+    list.forEach((st, i) => { this.beacons[i].phase = st.phase; });
+  }
   private builtVersion = -1;
   private sun: THREE.DirectionalLight;
 
@@ -161,6 +179,11 @@ export class Renderer {
     const flicker = 0.85 + 0.15 * Math.sin(t * 13) * Math.sin(t * 7.3);
     const base = this.furnaceState === 'burst' ? 120 : this.furnaceState === 'warn' ? 45 + 25 * Math.sin(t * 30) : 30;
     this.furnaceLight.intensity = base * flicker;
+    for (const b of this.beacons) {
+      const on = b.phase === 'warn' ? Math.sin(t * 40) > 0 : b.phase === 'slam' || b.phase === 'down';
+      b.mat.emissiveIntensity = on ? 3 : 0.2;
+      b.light.intensity = on ? 12 : 0;
+    }
     for (const f of this.faces.values()) f.animate(t);
     this.gl.render(this.scene, this.camera);
   }
@@ -176,6 +199,8 @@ function geometryFor(s: ShapeDesc): THREE.BufferGeometry {
       return new THREE.SphereGeometry(s.r, 20, 14);
     case 'capsule':
       return new THREE.CapsuleGeometry(s.r, s.hh * 2, 6, 14);
+    case 'cylinder':
+      return new THREE.CylinderGeometry(s.r, s.r, s.hh * 2, 20);
   }
 }
 
