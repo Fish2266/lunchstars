@@ -43,6 +43,11 @@ export class MatchHud {
     document.body.append(this.score, this.banner, this.feed);
   }
 
+  /** Display name for a player ("Blue", or "Red (you)"). */
+  nameOf(id: number) {
+    return this.name(id);
+  }
+
   private name(id: number) {
     const f = this.sim.fighters.get(id);
     const n = NAMES[(f?.slot ?? 0) % NAMES.length];

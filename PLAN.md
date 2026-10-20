@@ -83,6 +83,8 @@ A factory floor around a central fire pit.
 - Carrying: anything you hold (a KO'd player, a crate) is partly lifted and pulled along with you.
 - Fire: noise-shader flame sheets over a churning lava/coal bed; flames swell on the flare warning and shoot up into a column on the burst.
 - Bot (rewritten): priority-based — escape danger (belt near the pit, rim, a press about to slam) → haul a KO'd opponent onto a belt → armed: stand on the far side of the opponent from the nearest hazard (pit / open edge) so shots push them into it, keep each gun at its range, lob grenades, shoot barrels next to them → unarmed: grab a safe belt gun, else brawl from the hazard side; backs off when its KO meter is high. Aim lags/wobbles; unsticks itself. Bot-vs-bot plays full matches (~80 s, mostly punch KO → hauled into the fire).
+- Camera never clips the level: it pulls in front of walls, floor, platforms and presses (snaps in, eases out), and hides your own character when squeezed right up against it.
+- HUD shows what each hand is gripping (crate, barrel, railing, ledge, or another player by name). A gripping hand won't pick up a gun until you let go.
 - Scoop grab: a reaching hand with nothing in it feels straight down and grabs a loose body/object lying underneath (lets you pick up people off the floor).
 - Empty guns smoke on the ground until they vanish; blood puddles fade out (and fade away between rounds).
 

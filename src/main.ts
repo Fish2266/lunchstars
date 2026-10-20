@@ -145,6 +145,11 @@ async function main() {
 
   const inputs = new Map<number, PlayerInput>();
   const camTarget = new THREE.Vector3();
+  const camOffset = new THREE.Vector3();
+  const camRay = new THREE.Raycaster();
+  let camDist = 3.6;
+  /** Level geometry the camera won't pass through (refreshed when the scene is rebuilt). */
+  let cameraBlockers: THREE.Object3D[] = [];
   const camFwd = new THREE.Vector3();
   const raycaster = new THREE.Raycaster();
   const aimPoint = new THREE.Vector3();
@@ -209,6 +214,11 @@ async function main() {
     // Transforms first, so effects can pin blood to where body parts are now.
     if (renderer.sync(sim.entities, sim.entityVersion)) {
       staticMeshes = renderer.meshes.filter((_, i) => sim.entities[i].role === 'static');
+      // Thin floor stencils and signs don't count; presses do (they move, but they're big).
+      cameraBlockers = renderer.meshes.filter((_, i) => {
+        const e = sim.entities[i];
+        return (e.role === 'static' && e.model !== 'sign') || e.model === 'stamper';
+      });
     }
     sim.writeTransforms(transforms);
     for (const e of sim.drainEvents()) {
@@ -257,8 +267,22 @@ async function main() {
     const rx = -Math.cos(controls.yaw), rz = Math.sin(controls.yaw);
     const sh = effects.shake * effects.shake * 0.25;
     const jx = (Math.random() - 0.5) * sh, jy = (Math.random() - 0.5) * sh, jz = (Math.random() - 0.5) * sh;
-    const cx = camTarget.x - fx * dist + rx * 0.55, cy = camTarget.y - fy * dist + 0.25, cz = camTarget.z - fz * dist + rz * 0.55;
+    // Where the camera wants to be, relative to the pivot (just above the chest).
+    camOffset.set(-fx * dist + rx * 0.55, -fy * dist + 0.25, -fz * dist + rz * 0.55);
+    const want = camOffset.length();
+    camOffset.multiplyScalar(1 / want);
+    // Don't clip through the level: pull in front of anything between the pivot and the camera.
+    camRay.set(camTarget, camOffset);
+    camRay.far = want + 0.3;
+    const block = camRay.intersectObjects(cameraBlockers, true)[0];
+    const allowed = block ? Math.max(0.35, block.distance - 0.3) : want;
+    // Snap in fast when something gets in the way; ease back out when it clears.
+    camDist += (allowed - camDist) * (1 - Math.exp(-realDt * (allowed < camDist ? 30 : 4)));
+    camDist = Math.min(camDist, allowed);
+    const cx = camTarget.x + camOffset.x * camDist, cy = camTarget.y + camOffset.y * camDist, cz = camTarget.z + camOffset.z * camDist;
     renderer.camera.position.set(cx + jx, cy + jy, cz + jz);
+    // Squeezed right up against your own character (a wall or ceiling behind you): don't fill the screen with it.
+    renderer.setPlayerHidden(LOCAL_ID, camDist < 1.0);
     renderer.camera.lookAt(cx + fx * 10, cy + fy * 10, cz + fz * 10);
     renderer.focusShadow(camTarget);
     renderer.render();
@@ -270,12 +294,17 @@ async function main() {
       const h = f.hands[i];
       const el = hud.slots[i];
       const key = keyFor(i === 0 ? 'handL' : 'handR');
+      const grip = sim.gripOf(LOCAL_ID, i);
+      const gripName = grip ? ('player' in grip ? matchHud.nameOf(grip.player) : grip.object) : null;
       const html = h.item
         ? `<span class="k">${key}</span><span class="name">${h.item}</span><div class="ammo">${h.item === 'grenade' ? 'throw with ' + keyFor('fire') : `${h.ammo} / ${weapons[h.item].ammo}`}</div>`
-        : `<span class="k">${key}</span><span class="name">empty</span>`;
+        : gripName
+          ? `<span class="k">${key}</span><span class="name">${gripName}</span><div class="ammo">holding · let go of ${key} to drop</div>`
+          : `<span class="k">${key}</span><span class="name">empty</span>`;
       if (el.innerHTML !== html) el.innerHTML = html;
       el.classList.toggle('active', !!h.item && f.active === i);
-      el.classList.toggle('empty', !h.item);
+      el.classList.toggle('empty', !h.item && !gripName);
+      el.classList.toggle('gripping', !h.item && !!gripName);
     }
     hud.stun.textContent = both ? `${keyFor('cycle')} to switch hands` : '';
 
@@ -312,7 +341,7 @@ async function main() {
   requestAnimationFrame(frame);
 
   // Exposed for debugging in the console.
-  Object.assign(window, { sim, tuning, weapons, explosive, bot, effects, gore, goreSettings, handling, debugOpts });
+  Object.assign(window, { sim, tuning, weapons, explosive, bot, effects, gore, goreSettings, handling, debugOpts, renderer, controls });
 }
 
 main();

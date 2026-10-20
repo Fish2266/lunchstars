@@ -1097,7 +1097,10 @@ export class Sim {
         this.dropItem(id, i, { x: d.x * t, y: d.y * t + 1, z: d.z * t });
       }
 
-      if (key && !h.item) {
+      // A hand that's gripping something (a crate, a player, a ledge) keeps hold of it: it won't grab a
+      // gun as well. Let go first.
+      const gripping = !!r.hands[i].joint;
+      if (key && !h.item && !gripping) {
         // Pick up a gun the hand is touching.
         const hp = r.handPosition(i);
         const near = (p: V3) => Math.hypot(hp.x - p.x, hp.y - p.y, hp.z - p.z) < handling.grabReach;
@@ -1262,6 +1265,23 @@ export class Sim {
         this.addEntity(body, s, weapons[kind].color, 'prop', undefined, kind);
       }
     }
+  }
+
+  /**
+   * What a hand is gripping (a grab joint, not an item): another player, or a described object.
+   * null if the hand isn't holding on to anything.
+   */
+  gripOf(id: number, hand: 0 | 1): { player: number } | { object: string } | null {
+    const r = this.players.get(id);
+    const joint = r?.hands[hand].joint;
+    if (!joint) return null;
+    const b = joint.body2();
+    for (const [pid, p] of this.players) if (p !== r && p.bodyHandles.has(b.handle)) return { player: pid };
+    if (this.barrels.some((x) => x.body.handle === b.handle)) return { object: 'barrel' };
+    if (this.rails.some((x) => x.body.handle === b.handle)) return { object: 'railing' };
+    if (this.props.some((x) => x.body.handle === b.handle) || this.beltCrates.some((x) => x.body.handle === b.handle)) return { object: 'crate' };
+    if (this.loose.some((x) => x.body.handle === b.handle)) return { object: 'gun' };
+    return { object: b.isFixed() ? 'ledge' : 'something' };
   }
 
   /** Barrels that can still go off (for bots). */

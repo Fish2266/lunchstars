@@ -15,6 +15,15 @@ export class Renderer {
   /** Objects not tied to one entity (skinned bodies). */
   private extra: THREE.Object3D[] = [];
   private faces = new Map<number, Face>();
+  private bodies = new Map<number, THREE.Object3D>();
+
+  /** Hide a player's body (and face), e.g. your own when the camera is squeezed right up against you. */
+  setPlayerHidden(playerId: number, hidden: boolean) {
+    const b = this.bodies.get(playerId);
+    if (b) b.visible = !hidden;
+    const f = this.faces.get(playerId);
+    if (f) f.group.visible = !hidden;
+  }
   private furnaceLight: THREE.PointLight;
   private furnaceState: 'idle' | 'warn' | 'burst' = 'idle';
 
@@ -143,10 +152,12 @@ export class Renderer {
       this.scene.add(mesh);
       return mesh;
     });
-    for (const { bones, color } of bonesByPlayer.values()) {
+    this.bodies.clear();
+    for (const [pid, { bones, color }] of bonesByPlayer) {
       const body = buildBody(bones, gummy(color));
       this.scene.add(body);
       this.extra.push(body);
+      this.bodies.set(pid, body);
     }
     this.builtVersion = version;
     return true;
