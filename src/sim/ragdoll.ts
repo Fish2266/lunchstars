@@ -629,6 +629,55 @@ export class Ragdoll {
     }
 
     this.updateGrab([this.armMode[0] === 'reach' && k > 0.3, this.armMode[1] === 'reach' && k > 0.3]);
+    if (input.jump && k > 0.3) this.pullUp(k);
+    else this.climbing = false;
+  }
+
+  /** Mid-climb (jump held since a pull-up started from a high grip). */
+  private climbing = false;
+
+  /**
+   * Climbing: with jump held, hands gripping the level (a ledge, the pit rim, a platform edge) haul the body up
+   * toward the highest grip, then over it. One hand can do it alone, so you climb by holding with one, reaching
+   * higher with the other, and letting the lower one go. Grips on loose things (crates, players) don't count —
+   * pulling on those would just drag them down.
+   */
+  private pullUp(k: number) {
+    const t = tuning;
+    let grip: V3 | null = null;
+    let hands = 0;
+    for (const h of this.hands) {
+      if (!h.joint) continue;
+      const other = h.joint.body2();
+      if (other.isDynamic()) continue;
+      const p = localToWorld(other, h.joint.anchor2());
+      hands++;
+      if (!grip || p.y > grip.y) grip = p;
+    }
+    const c = this.chest.translation(), v = this.chest.linvel();
+    // A climb starts only from a grip at chest height or above (hanging, or reaching up to a ledge), then carries
+    // on over the top while jump stays held. So holding a waist-high railing and jumping doesn't vault you over it.
+    if (!grip) { this.climbing = false; return; }
+    if (!this.climbing && grip.y < c.y - 0.05) return;
+    this.climbing = true;
+    const share = hands >= 2 ? 1 : t.climbOneHand;
+    // At the lip (chest up level with the grip): pull higher so the hips clear it, and haul forward over it —
+    // the way you're facing, since by now the grip is right under your chest.
+    const atLip = c.y > grip.y - 0.1;
+    // Carry the body's weight and spring the chest up to just above the grip.
+    const err = clamp(grip.y + t.climbHeight + (atLip ? t.climbLipLift : 0) - c.y, -0.3, 1);
+    const ay = clamp(-t.gravity * share + (t.climbKp * err - t.climbKd * v.y) * share, 0, t.climbMaxAccel);
+    const up = ay * this.totalMass * this.dt * k;
+    // Hanging, the arms lift mostly the chest; mantling at the lip, the hips come up too so the legs clear it.
+    const hips = atLip ? 0.5 : 0.3;
+    this.chest.applyImpulse({ x: 0, y: up * (1 - hips), z: 0 }, true);
+    this.pelvis.applyImpulse({ x: 0, y: up * hips, z: 0 }, true);
+    if (atLip) {
+      const fx = Math.sin(this.yaw), fz = Math.cos(this.yaw);
+      const push = t.climbOver * this.totalMass * this.dt * k;
+      this.chest.applyImpulse({ x: fx * push * 0.6, y: 0, z: fz * push * 0.6 }, true);
+      this.pelvis.applyImpulse({ x: fx * push * 0.4, y: 0, z: fz * push * 0.4 }, true);
+    }
   }
 
   private driveLeg(leg: Leg, stepping: boolean, k: number) {

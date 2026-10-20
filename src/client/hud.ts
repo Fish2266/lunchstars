@@ -25,6 +25,7 @@ export class Hud {
   renderHelp() {
     this.help.innerHTML = `<b>${keyFor('forward')}${keyFor('left')}${keyFor('back')}${keyFor('right')}</b> move · <b>${keyFor('jump')}</b> jump · `
       + `<b>${keyFor('handL')}</b> / <b>${keyFor('handR')}</b> left / right hand: tap to punch, hold to grab or hold a gun (let go = drop)<br />`
+      + `Hanging on a ledge: hold <b>${keyFor('jump')}</b> to pull up, swap hands to climb · `
       + `<b>${keyFor('fire')}</b> shoot / throw grenade · <b>${keyFor('cycle')}</b> switch hands · `
       + `<b>${keyFor('shoveDummy')}</b> shove dummy · <b>${keyFor('reset')}</b> reset · <b>${keyFor('panel')}</b> tuning · <b>Esc</b> menu`;
   }

@@ -339,6 +339,8 @@ async function main() {
     const meView = view?.players.find((p) => p.id === localId);
     let follow = meView?.active ? aimOrigin(localId) : null;
     if (!follow && view) for (const p of view.players) if (p.active && !p.left && (follow = aimOrigin(p.id))) break;
+    // Sinking into the fire: the camera stays above the lava and watches you go under.
+    if (follow) follow = { ...follow, y: Math.max(follow.y, INCINERATOR.lavaY + 0.6) };
     cam.update(follow ?? { x: 0, y: 1.6, z: 1 }, controls.yaw, controls.pitch, effects.shake, frameDt, realDt);
     // Squeezed right up against your own character (a wall or ceiling behind you): don't fill the screen with it.
     renderer.setPlayerHidden(localId, cam.distance < 1.0);

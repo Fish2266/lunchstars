@@ -274,6 +274,8 @@ export class Sim {
   private rngState = 0x1234567;
   /** Players who have left (multiplayer): parked for good; their entities stay so indices never shift. */
   readonly left = new Set<number>();
+  /** Players who've already splashed through the lava this life. */
+  private plunged = new Set<number>();
   private dynamicCache: { version: number; indices: number[] } = { version: -1, indices: [] };
   /** Bumped whenever `entities` changes so the renderer knows to rebuild meshes. */
   entityVersion = 0;
@@ -344,6 +346,7 @@ export class Sim {
   respawn(id: number) {
     const r = this.players.get(id);
     if (!r || this.left.has(id)) return;
+    this.plunged.delete(id);
     const slot = this.fighters.get(id)!.slot;
     const s = this.spawns[slot % this.spawns.length];
     for (const other of this.players.values()) for (const b of r.bodyHandles) other.releaseIfAttachedTo(b);
@@ -493,6 +496,8 @@ export class Sim {
     const r = this.players.get(id);
     if (!r || !r.active) return;
     const pos = { ...r.chest.translation() };
+    // Burned deep down: the flames burst up at the lava surface, where everyone can see them.
+    if (cause === 'fire') pos.y = Math.max(pos.y, INCINERATOR.lavaY);
     this.events.push({ type: 'eliminated', player: id, cause, pos });
     if (this.match.phase === 'practice') { this.respawn(id); return; }
     if (!this.match.alive.has(id)) return;
@@ -684,15 +689,25 @@ export class Sim {
       }
     }
 
-    // The pit incinerates whatever falls in.
+    // The pit incinerates whatever falls in. Players splash through the lava surface and keep sinking out of
+    // sight; only well below it are they eliminated (with the big burst back up at the surface).
+    const surface = (p: V3) => ({ x: p.x, y: Math.max(p.y, map.lavaY), z: p.z });
     for (const [id, r] of this.players) {
-      if (r.active && (inBox(r.chest.translation(), map.fire) || inBox(r.pelvis.translation(), map.fire))) this.eliminate(id, 'fire');
+      if (!r.active) continue;
+      const c = r.chest.translation(), p = r.pelvis.translation();
+      // Doomed once the chest goes under (hanging from the rim, legs dangling in the flames, is still fine).
+      const overPit = Math.abs(c.x - map.pitCenter.x) < map.pitHalf && Math.abs(c.z - map.pitCenter.z) < map.pitHalf;
+      if (overPit && c.y < map.lavaY && !this.plunged.has(id)) {
+        this.plunged.add(id);
+        this.events.push({ type: 'burn', pos: surface(c) });
+      }
+      if (inBox(c, map.fireKill) || inBox(p, map.fireKill)) this.eliminate(id, 'fire');
     }
-    const burn = (p: V3) => this.events.push({ type: 'burn', pos: { ...p } });
+    const burn = (p: V3) => this.events.push({ type: 'burn', pos: surface(p) });
     for (const c of this.beltCrates) if (c.active && inBox(c.body.translation(), map.fire)) { burn(c.body.translation()); this.deactivateBeltCrate(c); }
     for (const p of this.props) if (inBox(p.body.translation(), map.fire)) { burn(p.body.translation()); this.resetProp(p); }
     for (const g of this.loose) if (g.active && inBox(g.body.translation(), map.fire)) { burn(g.body.translation()); this.deactivateLoose(g); }
-    for (const g of this.grenades) if (g.active && inBox(g.body.translation(), map.fire)) { this.explode({ ...g.body.translation() }); this.deactivateGrenade(g); }
+    for (const g of this.grenades) if (g.active && inBox(g.body.translation(), map.fire)) { this.explode(surface(g.body.translation())); this.deactivateGrenade(g); }
     for (const r of this.rails) {
       if (r.broken && r.body.isEnabled() && inBox(r.body.translation(), map.fire)) {
         burn(r.body.translation());
@@ -1130,7 +1145,8 @@ export class Sim {
     } else if (f.sinceHit > t.koDecayDelay) {
       f.ko = Math.max(0, f.ko - t.koDecay * DT);
     }
-    r.knockedOut = f.koTimer > 0;
+    // Into the lava: done for. Limp, so nobody can catch the shaft wall under the surface and climb back out.
+    r.knockedOut = f.koTimer > 0 || this.plunged.has(id);
   }
 
   private noteHit(id: number, strength: number, dir: V3) {
@@ -1488,10 +1504,12 @@ export class Sim {
   private addStatic(pos: V3, half: V3, color: number, opts: Parameters<ArenaBuilder['box']>[3] = {}) {
     const q = eulerYX(opts.rotY ?? 0, opts.rotX ?? 0);
     const body = this.world.createRigidBody(this.R.RigidBodyDesc.fixed().setTranslation(pos.x, pos.y, pos.z).setRotation(q));
-    this.world.createCollider(
-      this.R.ColliderDesc.cuboid(half.x, half.y, half.z).setFriction(opts.friction ?? 0.9).setCollisionGroups(groups(WORLD_GROUP, 0xffff)),
-      body,
-    );
+    if (!opts.ghost) {
+      this.world.createCollider(
+        this.R.ColliderDesc.cuboid(half.x, half.y, half.z).setFriction(opts.friction ?? 0.9).setCollisionGroups(groups(WORLD_GROUP, 0xffff)),
+        body,
+      );
+    }
     this.addEntity(body, { kind: 'box', hx: half.x, hy: half.y, hz: half.z }, color, 'static', undefined, opts.flow ? 'belt' : undefined);
     const e = this.entities[this.entities.length - 1];
     if (opts.emissive) e.emissive = opts.emissive;

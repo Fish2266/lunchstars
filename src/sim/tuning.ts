@@ -70,6 +70,14 @@ export const tuning = {
   // Grab.
   grabRadius: 0.2,
   grabBreakForce: 0, // reserved: 0 = unbreakable
+  // Climbing: hold jump while a hand grips the level to pull yourself up toward (and over) that grip.
+  climbHeight: 0.3, // where the chest is pulled to, relative to the highest grip
+  climbKp: 40, // pull strength toward that height
+  climbKd: 7,
+  climbMaxAccel: 45, // m/s² cap on the pull (gravity included)
+  climbOneHand: 0.9, // share of the full pull one hand manages (two hands = 1)
+  climbOver: 9, // m/s² forward once the chest is level with the grip, to get over the edge
+  climbLipLift: 0.9, // extra height pulled to at the lip (a mantle) so the hips and legs clear it
   // Carrying: how much a held body follows you (per tick) and how much of its weight you take.
   carryPull: 0.12,
   carryLift: 0.6,

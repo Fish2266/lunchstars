@@ -24,7 +24,8 @@ export interface Box3 { min: V3; max: V3 }
 export type Surface = 'concrete' | 'brick' | 'grate' | 'metal';
 
 export interface ArenaBuilder {
-  box(pos: V3, half: V3, color: number, opts?: { rotY?: number; rotX?: number; emissive?: number; flow?: { x: number; z: number }; friction?: number; surface?: Surface }): void;
+  /** `ghost`: drawn, but nothing collides with it (the lava surface). */
+  box(pos: V3, half: V3, color: number, opts?: { rotY?: number; rotX?: number; emissive?: number; flow?: { x: number; z: number }; friction?: number; surface?: Surface; ghost?: boolean }): void;
   crate(pos: V3, size: number, color: number): void;
   /** A breakable railing section: solid until a hard hit, then it falls loose. */
   rail(pos: V3, half: V3, color: number): void;
@@ -59,8 +60,12 @@ export const INCINERATOR = {
     { x: -4.5, y: 0, z: -3.3 },
     { x: 4.5, y: 0, z: -3.3 },
   ] as V3[],
-  /** Below the rim of the pit: incinerated. */
-  fire: { min: { x: -PIT, y: -6, z: -PIT }, max: { x: PIT, y: -0.55, z: PIT } } as Box3,
+  /** Top of the (opaque) lava in the pit. Nothing stands on it: you plunge through, out of sight. */
+  lavaY: -1.42,
+  /** Things that sink fully under the lava are burned up. */
+  fire: { min: { x: -PIT, y: -12, z: -PIT }, max: { x: PIT, y: -1.75, z: PIT } } as Box3,
+  /** Players are incinerated once they've sunk well below the surface, so it reads as a long fall into the fire. */
+  fireKill: { min: { x: -PIT, y: -12, z: -PIT }, max: { x: PIT, y: -2.9, z: PIT } } as Box3,
   belts: [
     // Push volumes run 0.6 m past the belt's end so nothing comes to rest balanced on the pit's edge.
     { box: { min: { x: -8.6, y: -0.6, z: -1 }, max: { x: -PIT + 0.6, y: 1.6, z: 1 } }, vel: { x: BELT_SPEED, z: 0 }, spawn: { x: -7.9, y: 1.1, z: 0 } },
@@ -114,12 +119,14 @@ export function buildIncinerator(b: ArenaBuilder) {
   }
 
   // ---------------------------------------------------------------- the pit
-  // Glowing walls down to a bed of fire about a metre and a half below the rim (visible from the floor).
+  // Glowing walls down a deep shaft. The fire bed about a metre and a half below the rim is only a surface:
+  // whoever falls in plunges through it and keeps sinking, out of sight, before they're gone.
   for (const s of [-1, 1]) {
-    b.box({ x: s * (PIT + 0.1), y: -1.0, z: 0 }, { x: 0.1, y: 0.95, z: PIT + 0.2 }, C.pitWall, { emissive: 0.6 });
-    b.box({ x: 0, y: -1.0, z: s * (PIT + 0.1) }, { x: PIT + 0.2, y: 0.95, z: 0.1 }, C.pitWall, { emissive: 0.6 });
+    b.box({ x: s * (PIT + 0.1), y: -4.0, z: 0 }, { x: 0.1, y: 3.95, z: PIT + 0.2 }, C.pitWall, { emissive: 0.6 });
+    b.box({ x: 0, y: -4.0, z: s * (PIT + 0.1) }, { x: PIT + 0.2, y: 3.95, z: 0.1 }, C.pitWall, { emissive: 0.6 });
   }
-  b.box({ x: 0, y: -1.5, z: 0 }, { x: PIT, y: 0.08, z: PIT }, C.fire, { emissive: 2.6 });
+  b.box({ x: 0, y: -1.5, z: 0 }, { x: PIT, y: 0.08, z: PIT }, C.fire, { emissive: 2.6, ghost: true });
+  b.box({ x: 0, y: -8.1, z: 0 }, { x: PIT, y: 0.1, z: PIT }, C.fire, { emissive: 1.2 }); // shaft floor, far below
 
   // Breakable railing around the rim, with gaps where the belts come in.
   const r = PIT + 0.12;
