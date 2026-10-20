@@ -114,19 +114,22 @@ export function buildIncinerator(b: ArenaBuilder) {
   b.box({ x: -5.5, y: -0.5, z: 0 }, { x: 3.5, y: 0.5, z: PIT }, C.floor, concrete); // left
   b.box({ x: 5.5, y: -0.5, z: 0 }, { x: 3.5, y: 0.5, z: PIT }, C.floor, concrete); // right
   // Hazard stripes around the rim.
+  // (The side stripes sit 2 mm higher so the corner overlaps don't z-fight.)
   for (const [x, z, hx, hz] of [[0, 2.3, 2.6, 0.18], [0, -2.3, 2.6, 0.18], [-2.3, 0, 0.18, 2.6], [2.3, 0, 0.18, 2.6]]) {
-    b.box({ x, y: 0.005, z }, { x: hx, y: 0.008, z: hz }, C.stripe);
+    b.box({ x, y: hz > hx ? 0.007 : 0.005, z }, { x: hx, y: 0.008, z: hz }, C.stripe);
   }
 
   // ---------------------------------------------------------------- the pit
   // Glowing walls down a deep shaft. The fire bed about a metre and a half below the rim is only a surface:
   // whoever falls in plunges through it and keeps sinking, out of sight, before they're gone.
+  // (Inner faces 1 cm inside the opening, so they never share a plane with the floor slabs' edges: z-fighting.)
+  const wallX = PIT + 0.09;
   for (const s of [-1, 1]) {
-    b.box({ x: s * (PIT + 0.1), y: -4.0, z: 0 }, { x: 0.1, y: 3.95, z: PIT + 0.2 }, C.pitWall, { emissive: 0.6 });
-    b.box({ x: 0, y: -4.0, z: s * (PIT + 0.1) }, { x: PIT + 0.2, y: 3.95, z: 0.1 }, C.pitWall, { emissive: 0.6 });
+    b.box({ x: s * wallX, y: -4.0, z: 0 }, { x: 0.1, y: 3.95, z: PIT + 0.2 }, C.pitWall, { emissive: 0.6 });
+    b.box({ x: 0, y: -4.0, z: s * wallX }, { x: PIT + 0.2, y: 3.95, z: 0.1 }, C.pitWall, { emissive: 0.6 });
   }
   b.box({ x: 0, y: -1.5, z: 0 }, { x: PIT, y: 0.08, z: PIT }, C.fire, { emissive: 2.6, ghost: true });
-  b.box({ x: 0, y: -8.1, z: 0 }, { x: PIT, y: 0.1, z: PIT }, C.fire, { emissive: 1.2 }); // shaft floor, far below
+  b.box({ x: 0, y: -8.1, z: 0 }, { x: PIT - 0.05, y: 0.1, z: PIT - 0.05 }, C.fire, { emissive: 1.2 }); // shaft floor, far below
 
   // Breakable railing around the rim, with gaps where the belts come in.
   const r = PIT + 0.12;
@@ -160,7 +163,7 @@ export function buildIncinerator(b: ArenaBuilder) {
   b.box({ x: -9.1, y: ph, z: -0.6 }, { x: 0.1, y: ph, z: 7.6 }, C.parapet, metal); // left
   b.box({ x: 9.1, y: ph, z: -0.6 }, { x: 0.1, y: ph, z: 7.6 }, C.parapet, metal); // right
   for (const [x, z, hx, hz] of [[0, 7.1, 9.2, 0.13], [-9.1, -0.6, 0.13, 7.6], [9.1, -0.6, 0.13, 7.6]]) {
-    b.box({ x, y: ph * 2 + 0.03, z }, { x: hx, y: 0.03, z: hz }, C.stripe);
+    b.box({ x, y: ph * 2 + 0.03 + (hz > hx ? 0.002 : 0), z }, { x: hx, y: 0.03, z: hz }, C.stripe); // side ones 2 mm up: no corner z-fight
   }
   // Pipes along the back wall.
   b.box({ x: 0, y: 3.6, z: -7.85 }, { x: 9, y: 0.16, z: 0.16 }, C.pipeA);
