@@ -337,10 +337,7 @@ export class Ragdoll {
     return localToWorld(this.hands[i].forearm.body, HAND_LOCAL);
   }
 
-  /** World position of the right hand. */
-  rightHand() {
-    return localToWorld(this.parts.get('forearmR')!.body, HAND_LOCAL);
-  }
+
 
   /** Point the camera and the sim agree shots come from: above the chest. */
   aimOrigin() {

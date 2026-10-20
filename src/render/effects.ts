@@ -22,7 +22,8 @@ export class Effects {
   private time = 0;
 
   constructor(private readonly scene: THREE.Scene, private readonly localPlayer: number) {
-    for (let i = 0; i < 4; i++) {
+    // Two is plenty for overlapping flashes; every light costs on every lit pixel.
+    for (let i = 0; i < 2; i++) {
       const light = new THREE.PointLight(0xffa040, 0, 8, 2);
       scene.add(light);
       this.lights.push({ light, until: 0, peak: 0, start: 0 });
@@ -158,9 +159,21 @@ export class Effects {
       f.update(t);
       if (t >= 1) {
         this.scene.remove(f.obj);
+        this.disposeOwned(f.obj);
         this.live.splice(i, 1);
       }
     }
+  }
+
+  /** Free the per-effect GPU resources (cloned materials, tracer geometry); shared ones are kept. */
+  private disposeOwned(obj: THREE.Object3D) {
+    const shared = new Set<unknown>([this.puffGeo, this.emberGeo, this.tracerMat, this.smokeMat]);
+    obj.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.geometry && !shared.has(m.geometry)) m.geometry.dispose();
+      const mats = Array.isArray(m.material) ? m.material : m.material ? [m.material] : [];
+      for (const mat of mats) if (!shared.has(mat)) mat.dispose();
+    });
   }
 
   private add(obj: THREE.Object3D, life: number, update: (t: number) => void) {

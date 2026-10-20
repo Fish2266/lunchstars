@@ -32,6 +32,8 @@ export interface ArenaBuilder {
   barrel(pos: V3): void;
   /** A painted sign (text on the +z face, or on top for a floor stencil). */
   sign(pos: V3, half: V3, color: number, label: string, onTop?: boolean): void;
+  /** A floating gun spawner (walk up and grab; respawns). The Incinerator uses belts instead. */
+  pickup(kind: import('./weapons').WeaponKind, pos: V3): void;
 }
 
 export interface Belt {
@@ -65,7 +67,6 @@ export const INCINERATOR = {
     { box: { min: { x: PIT - 0.6, y: -0.6, z: -1 }, max: { x: 8.6, y: 1.6, z: 1 } }, vel: { x: -BELT_SPEED, z: 0 }, spawn: { x: 7.9, y: 1.1, z: 0 } },
     { box: { min: { x: -1, y: -0.6, z: -8 }, max: { x: 1, y: 1.6, z: -PIT + 0.6 } }, vel: { x: 0, z: BELT_SPEED }, spawn: { x: 0, y: 1.1, z: -7.3 } },
   ] as Belt[],
-  beltSpeed: BELT_SPEED,
   /** The pit flare hits anyone in here. */
   flare: { min: { x: -3.4, y: -0.6, z: -3.4 }, max: { x: 3.4, y: 3.2, z: 3.4 } } as Box3,
   pitCenter: { x: 0, y: 0, z: 0 } as V3,

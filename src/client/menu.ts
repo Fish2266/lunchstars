@@ -30,6 +30,8 @@ export class Menu {
   /** True once the player has clicked "Play" at least once (pointer lock may be unavailable). */
   playing = false;
   onBindingsChanged: () => void = () => {};
+  /** Called once, the first time Play is pressed (the match starts then, not at page load). */
+  onFirstPlay: () => void = () => {};
 
   constructor(private readonly controls: Controls, private readonly canvas: HTMLCanvasElement) {
     const style = document.createElement('style');
@@ -76,6 +78,7 @@ export class Menu {
   }
 
   play() {
+    if (!this.playing) this.onFirstPlay();
     this.playing = true;
     this.root.classList.add('hidden');
     this.controls.suspended = false;

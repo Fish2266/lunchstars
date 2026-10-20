@@ -1,7 +1,7 @@
 // Low-poly display models built from primitives. Pure visuals: collision still uses the simple
 // shapes in sim/weapons.ts. Every gun model points down +Z with its center where the sim's box center is.
 import * as THREE from 'three';
-import type { EntityDesc, ModelKind } from '../sim/sim';
+import type { EntityDesc } from '../sim/sim';
 import { surfaceMaterial, worldBox } from './surfaces';
 
 const mat = (color: number, opts: Partial<THREE.MeshStandardMaterialParameters> = {}) =>
@@ -94,33 +94,7 @@ export function gummy(color: number) {
   return m;
 }
 
-function blob(rx: number, ry: number, rz: number, m: THREE.Material, y = 0, z = 0) {
-  const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), m);
-  mesh.scale.set(rx, ry, rz);
-  mesh.position.set(0, y, z);
-  return mesh;
-}
 
-/** Head with a big-eyed cartoon face on the +Z side (characters face +Z at yaw 0). */
-function head(radius: number, color: number) {
-  const r = radius * 1.12;
-  const g = new THREE.Group();
-  g.add(blob(r, r * 1.04, r, gummy(color)));
-  for (const side of [-1, 1]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(r * 0.17, 12, 10), EYE);
-    eye.position.set(side * r * 0.34, r * 0.16, r * 0.88);
-    eye.scale.set(0.85, 1.2, 0.6);
-    g.add(eye);
-    const shine = new THREE.Mesh(new THREE.SphereGeometry(r * 0.05, 8, 6), EYE_SHINE);
-    shine.position.set(side * r * 0.34 + r * 0.04, r * 0.24, r * 0.98);
-    g.add(shine);
-  }
-  const mouth = new THREE.Mesh(new THREE.TorusGeometry(r * 0.18, r * 0.03, 6, 12, Math.PI), EYE);
-  mouth.position.set(0, -r * 0.26, r * 0.92);
-  mouth.rotation.z = Math.PI;
-  g.add(mouth);
-  return g;
-}
 
 const STAR = new THREE.MeshBasicMaterial({ color: 0xffe14a });
 
@@ -190,9 +164,6 @@ export function buildFace(r: number): Face {
   };
 }
 
-function capsule(r: number, len: number, m: THREE.Material) {
-  return new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 8, 16), m);
-}
 
 /** Display model for one entity: guns from the weapon kind, gummy body parts from the collision shape. */
 export function buildModel(e: EntityDesc): THREE.Object3D {
@@ -208,41 +179,8 @@ export function buildModel(e: EntityDesc): THREE.Object3D {
     case 'stamper': g = stamper(s.kind === 'box' ? s : { hx: 0.75, hy: 0.28, hz: 1.05 }); break;
     case 'barrel': g = barrel(s.kind === 'cylinder' ? s : { hh: 0.42, r: 0.3 }); break;
     case 'sign': g = sign(s.kind === 'box' ? s : { hx: 1, hy: 0.3, hz: 0.03 }, e.color, e.label ?? '', !!e.labelOnTop); break;
-    case 'head': g = head(s.kind === 'ball' ? s.r : 0.14, e.color); break;
-    case 'torso': {
-      // A round bean instead of a box, overlapping the hips so the body reads as one blob.
-      const b = s.kind === 'box' ? s : { hx: 0.2, hy: 0.17, hz: 0.12 };
-      g = blob(b.hx * 1.18, b.hy * 1.5, b.hz * 1.55, gummy(e.color), -0.02);
-      break;
-    }
-    case 'hips': {
-      const b = s.kind === 'box' ? s : { hx: 0.17, hy: 0.1, hz: 0.11 };
-      g = blob(b.hx * 1.2, b.hy * 1.8, b.hz * 1.55, gummy(e.color));
-      break;
-    }
-    case 'limb': {
-      const c = s.kind === 'capsule' ? s : { hh: 0.1, r: 0.06 };
-      g = capsule(c.r * 1.3, c.hh * 2, gummy(e.color));
-      break;
-    }
-    case 'forearm': {
-      // Forearm with a mitten hand on the end.
-      const c = s.kind === 'capsule' ? s : { hh: 0.1, r: 0.055 };
-      const grp = new THREE.Group();
-      grp.add(capsule(c.r * 1.25, c.hh * 2, gummy(e.color)));
-      grp.add(blob(c.r * 1.7, c.r * 1.9, c.r * 1.6, gummy(e.color), -(c.hh + c.r * 0.9)));
-      g = grp;
-      break;
-    }
-    case 'shin': {
-      // Shin with a little rounded foot pointing forward.
-      const c = s.kind === 'capsule' ? s : { hh: 0.19, r: 0.07 };
-      const grp = new THREE.Group();
-      grp.add(capsule(c.r * 1.3, c.hh * 2, gummy(e.color)));
-      grp.add(blob(c.r * 1.35, c.r * 0.95, c.r * 1.9, gummy(e.color), -(c.hh + c.r * 0.35), c.r * 0.7));
-      g = grp;
-      break;
-    }
+    // Player parts are drawn by the one-piece skinned body (body.ts), never as separate models.
+    default: g = new THREE.Group();
   }
   g.traverse((o) => {
     if ((o as THREE.Mesh).isMesh) { o.castShadow = true; o.receiveShadow = true; }
@@ -279,7 +217,6 @@ function beltTexture(dir: '>' | '<' | '^' | 'v') {
 }
 
 const beltTextures: { tex: THREE.Texture; du: number; dv: number }[] = [];
-export function setBeltSpeed(_v: number) { /* belts carry their own speed now (EntityDesc.flow) */ }
 
 function belt(b: { hx: number; hy: number; hz: number }, flow: { x: number; z: number }) {
   // On a box's top face u runs along +x and v along -z.

@@ -341,11 +341,16 @@ export class Gore {
     this.splats.instanceMatrix.needsUpdate = true;
     this.splatAlpha.needsUpdate = true;
     // Once a round-reset fade has finished, go back to the normal slow fade for new puddles.
-    if (this.fastFade > 0 && this.splatUsed > 0 && [...this.splatEnd.subarray(0, this.splatUsed)].every((e) => e <= this.time)) {
+    if (this.fastFade > 0 && this.splatUsed > 0 && this.allSplatsGone()) {
       this.fastFade = 0;
       this.splatUsed = 0;
       this.splatNext = 0;
     }
+  }
+
+  private allSplatsGone() {
+    for (let i = 0; i < this.splatUsed; i++) if (this.splatEnd[i] > this.time) return false;
+    return true;
   }
 
   private updateCasings(dt: number) {

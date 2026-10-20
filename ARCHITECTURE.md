@@ -18,14 +18,16 @@ src/
     body.ts     One-piece gummy character (bean torso+head, tapered limbs): smooth-union SDF of all parts, meshed once with marching cubes,
                 skinned to 11 bones that copy the physics bodies (one draw call, no seams)
   client/     Browser-only: controls (via bindings.ts, remappable), menu.ts (pause + settings), matchHud.ts
-              (score pips, banners, kill feed, slow-mo), lil-gui tuning panel,
+              (score pips, banners, kill feed, slow-mo), hud.ts (hand slots, help, debug HUD), camera.ts
+              (third-person rig, no clipping), debug.ts (lil-gui tuning panel),
               bot (makes PlayerInput like a human)
   main.ts     Wires it together: input -> sim.step (fixed 60 Hz) -> transforms -> render
 ```
 
 ## Rules
 1. **`src/sim` stays pure.** It may import Rapier and Three's *math* classes (Vector3/Quaternion), nothing else from Three, and never `window`/`document`. That lets the same sim run in single-player, on the multiplayer host, or on a Node server.
-2. **Inputs in, state out.** `sim.step(Map<playerId, PlayerInput>)` is the only way to drive players. `sim.writeTransforms(Float32Array)` (7 floats per entity: pos + quat) is the only way the renderer reads state. That array is also the network snapshot format in Phase 5.
+2. **Inputs in, state out.** Besides transforms, `sim.view()` returns a plain `GameView` (match, hazards, per-player hands/grips/KO) — the HUD and renderer read only that, the transforms and events, so a multiplayer client can be fed the same data from the host.
+2b. **Inputs in, state out (transforms).** `sim.step(Map<playerId, PlayerInput>)` is the only way to drive players. `sim.writeTransforms(Float32Array)` (7 floats per entity: pos + quat) is the only way the renderer reads state. That array is also the network snapshot format in Phase 5.
 3. **Fixed timestep.** Physics always steps at `DT = 1/60`; the client uses an accumulator.
 4. **Effects come from events.** The sim pushes `SimEvent`s (shot, hit, explosion, pickup…); the client drains them with `sim.drainEvents()`. In multiplayer these become the reliable channel.
 5. **Hidden entities** (inactive grenades, held guns not in hand, taken pickups) are parked at `HIDDEN_Y`; the renderer hides anything below -500. Entity lists never shrink mid-game, so snapshot indices stay stable.
@@ -46,6 +48,7 @@ src/
 - **Pose PD**: every body part gets a torque toward a target world orientation (`drive()`), with gains × `stiffness`. Pelvis/chest/head target upright + facing yaw, plus lean (speed and acceleration), waddle (roll over the stance foot), and hip twist from the stride. Torso, head, and idle arms use lower gain multipliers so they wobble.
 - **Stun**: hits add `stunTimer`; `stiffness = clamp(1 - stunTimer/stunTime, stunFloor, 1)`, which also scales the hover spring and locomotion, so a big hit makes the character crumple and then stand back up.
 - **Arm hold-up**: arms that aim or reach get gravity cancelled, so the PD only has to orient them. PD torque uses per-axis inertia (thin limbs barely resist twist).
+- **Twist clamp (render only)**: before skinning, each bone's twist about its long axis relative to its parent is clamped (`limitTwist` in renderer.ts), so the one-piece mesh never pinches inside-out.
 - **Grab**: while held, each hand checks a small sphere at its tip; on overlap it creates a ball joint to that body (players, props, or static level geometry — so you can hang off ledges). Released when the button is let go.
 
 ## Running

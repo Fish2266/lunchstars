@@ -1,5 +1,6 @@
 // Round / match presentation: score pips at the top, big centre banners, and a short kill feed.
-import { PLAYER_COLORS, type Sim, type SimEvent } from '../sim/sim';
+// Reads a GameView (plus events), never the sim, so it works the same on a multiplayer client.
+import { PLAYER_COLORS, type GameView, type SimEvent } from '../sim/sim';
 import { keyFor } from './bindings';
 
 const CSS = `
@@ -33,7 +34,10 @@ export class MatchHud {
   /** Seconds of slow motion still to play (read by the main loop). */
   slowmo = 0;
 
-  constructor(private readonly sim: Sim, private readonly localId: number) {
+  /** Latest state, for names/colours and the scoreboard. */
+  private view: GameView | null = null;
+
+  constructor(private readonly localId: number) {
     const style = document.createElement('style');
     style.textContent = CSS;
     document.head.appendChild(style);
@@ -48,15 +52,17 @@ export class MatchHud {
     return this.name(id);
   }
 
+  private slotOf(id: number) {
+    return this.view?.players.find((p) => p.id === id)?.slot ?? 0;
+  }
+
   private name(id: number) {
-    const f = this.sim.fighters.get(id);
-    const n = NAMES[(f?.slot ?? 0) % NAMES.length];
+    const n = NAMES[this.slotOf(id) % NAMES.length];
     return id === this.localId ? `${n} (you)` : n;
   }
 
   private color(id: number) {
-    const f = this.sim.fighters.get(id);
-    return '#' + PLAYER_COLORS[(f?.slot ?? 0) % PLAYER_COLORS.length].toString(16).padStart(6, '0');
+    return '#' + PLAYER_COLORS[this.slotOf(id) % PLAYER_COLORS.length].toString(16).padStart(6, '0');
   }
 
   private show(big: string, small = '', seconds = 2.5, color = '#fff') {
@@ -86,7 +92,7 @@ export class MatchHud {
       case 'eliminated': {
         const how = e.cause === 'fire' ? 'got incinerated' : 'took the long way down';
         this.post(`<b style="color:${this.color(e.player)}">${this.name(e.player)}</b> ${how}`);
-        if (this.sim.match.phase !== 'practice') this.slowmo = 0.9;
+        if (this.view?.match.phase !== 'practice') this.slowmo = 0.9;
         break;
       }
       case 'roundOver':
@@ -99,8 +105,9 @@ export class MatchHud {
     }
   }
 
-  update(dt: number) {
-    const m = this.sim.match;
+  update(view: GameView, dt: number) {
+    this.view = view;
+    const m = view.match;
     // Countdown numbers.
     if (m.phase === 'countdown') {
       const n = Math.ceil(m.timer);
@@ -117,11 +124,12 @@ export class MatchHud {
     if (m.phase === 'practice') { this.score.style.display = 'none'; return; }
     this.score.style.display = 'flex';
     let html = '';
-    for (const [id] of this.sim.players) {
-      const wins = m.wins.get(id) ?? 0;
+    for (const p of view.players) {
+      const id = p.id;
+      const wins = m.wins[id] ?? 0;
       let pips = '';
       for (let i = 0; i < m.winsToWin; i++) pips += `<span class="pip${i < wins ? ' won' : ''}"></span>`;
-      html += `<div class="p${m.alive.has(id) || m.phase === 'countdown' ? '' : ' out'}"><span class="name" style="color:${this.color(id)}">${this.name(id)}</span>${pips}</div>`;
+      html += `<div class="p${m.alive.includes(id) || m.phase === 'countdown' ? '' : ' out'}"><span class="name" style="color:${this.color(id)}">${this.name(id)}</span>${pips}</div>`;
     }
     html += `<div class="round">Round ${m.round}</div>`;
     if (this.score.innerHTML !== html) this.score.innerHTML = html;

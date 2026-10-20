@@ -16,6 +16,8 @@ export class Renderer {
   private extra: THREE.Object3D[] = [];
   private faces = new Map<number, Face>();
   private bodies = new Map<number, THREE.Object3D>();
+  /** Each player's bones in PARTS order (parents before children), for the twist clamp. */
+  private skeletons: THREE.Bone[][] = [];
 
   /** Hide a player's body (and face), e.g. your own when the camera is squeezed right up against you. */
   setPlayerHidden(playerId: number, hidden: boolean) {
@@ -32,7 +34,7 @@ export class Renderer {
   }
 
   /** Red warning beacons on top of each press gantry: blink while it shudders, solid while it slams. */
-  private beacons: { mat: THREE.MeshStandardMaterial; light: THREE.PointLight; phase: string }[] = [];
+  private beacons: { mat: THREE.MeshStandardMaterial; phase: string }[] = [];
   setStampers(list: { x: number; z: number; phase: string }[]) {
     while (this.beacons.length < list.length) {
       const st = list[this.beacons.length];
@@ -41,10 +43,9 @@ export class Renderer {
       const base = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.06, 12), new THREE.MeshStandardMaterial({ color: 0x222222 }));
       dome.position.set(st.x, 3.97, st.z);
       base.position.set(st.x, 3.97, st.z);
-      const light = new THREE.PointLight(0xff3020, 0, 6, 1.6);
-      light.position.set(st.x, 4.1, st.z);
-      this.scene.add(dome, base, light);
-      this.beacons.push({ mat, light, phase: 'up' });
+      // Emissive only (no light of its own): bright enough to read, and lights are expensive.
+      this.scene.add(dome, base);
+      this.beacons.push({ mat, phase: 'up' });
     }
     list.forEach((st, i) => { this.beacons[i].phase = st.phase; });
   }
@@ -153,6 +154,7 @@ export class Renderer {
       return mesh;
     });
     this.bodies.clear();
+    this.skeletons = [...bonesByPlayer.values()].map((e) => e.bones);
     for (const [pid, { bones, color }] of bonesByPlayer) {
       const body = buildBody(bones, gummy(color));
       this.scene.add(body);
@@ -172,6 +174,7 @@ export class Renderer {
       m.position.set(t[o], t[o + 1], t[o + 2]);
       m.quaternion.set(t[o + 3], t[o + 4], t[o + 5], t[o + 6]);
     }
+    for (const bones of this.skeletons) limitTwist(bones);
   }
 
   /** Keep the shadow camera centered on the action. */
@@ -192,8 +195,7 @@ export class Renderer {
     this.furnaceLight.intensity = base * flicker;
     for (const b of this.beacons) {
       const on = b.phase === 'warn' ? Math.sin(t * 40) > 0 : b.phase === 'slam' || b.phase === 'down';
-      b.mat.emissiveIntensity = on ? 3 : 0.2;
-      b.light.intensity = on ? 12 : 0;
+      b.mat.emissiveIntensity = on ? 4 : 0.2;
     }
     for (const f of this.faces.values()) f.animate(t);
     this.gl.render(this.scene, this.camera);
@@ -235,4 +237,49 @@ function materialFor(e: EntityDesc): THREE.Material {
 
 function isGunModel(m: string) {
   return m === 'pistol' || m === 'shotgun' || m === 'grenade' || m === 'grenadeLive';
+}
+
+// ---------------------------------------------------------------- twist clamp for the skinned bodies
+//
+// Ball joints let a limb spin all the way round its own axis relative to its parent. Linear-blend skinning
+// can't follow that: the skin around the joint pinches to nothing (the "candy wrapper"), its normals
+// degenerate and it renders black. So, for drawing only, each bone's twist about its long (local Y) axis
+// relative to its parent is clamped to a natural range. The physics is untouched.
+
+/** Parent index and max twist (radians) for each part, in PARTS order. */
+const TWIST: [number, number][] = [
+  [-1, 0], // pelvis
+  [0, 0.7], // chest
+  [1, 1.0], // head
+  [0, 0.7], // thighL
+  [3, 0.35], // shinL
+  [0, 0.7], // thighR
+  [5, 0.35], // shinR
+  [1, 1.0], // upperArmL
+  [7, 0.5], // forearmL
+  [1, 1.0], // upperArmR
+  [9, 0.5], // forearmR
+];
+const _rel = new THREE.Quaternion();
+const _tw = new THREE.Quaternion();
+const _inv = new THREE.Quaternion();
+const _Y = new THREE.Vector3(0, 1, 0);
+
+function limitTwist(bones: THREE.Bone[]) {
+  for (let i = 1; i < bones.length && i < TWIST.length; i++) {
+    const [p, max] = TWIST[i];
+    const qp = bones[p].quaternion, qc = bones[i].quaternion;
+    // Rotation of the child relative to its parent, split into twist (about Y) and swing.
+    _rel.copy(qp).invert().multiply(qc);
+    const len = Math.hypot(_rel.y, _rel.w);
+    if (len < 1e-6) continue;
+    const angle = 2 * Math.atan2(_rel.y / len, _rel.w / len);
+    const wrapped = Math.atan2(Math.sin(angle), Math.cos(angle));
+    if (Math.abs(wrapped) <= max) continue;
+    _tw.set(0, _rel.y / len, 0, _rel.w / len); // current twist
+    _inv.copy(_tw).invert();
+    const swing = _rel.multiply(_inv); // rel = swing * twist  =>  swing = rel * twist^-1
+    _tw.setFromAxisAngle(_Y, Math.sign(wrapped) * max);
+    qc.copy(qp).multiply(swing.multiply(_tw));
+  }
 }

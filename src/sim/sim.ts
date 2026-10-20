@@ -145,6 +145,43 @@ export interface Fighter {
   mashPrev: boolean;
 }
 
+// ---------------------------------------------------------------- state view (what clients see)
+
+/** What a hand is gripping with a grab joint (not an item). */
+export type Grip = { player: number } | { object: string } | null;
+
+export interface PlayerView {
+  id: number;
+  slot: number;
+  active: boolean;
+  hands: { item: WeaponKind | null; ammo: number; grip: Grip }[];
+  activeHand: 0 | 1;
+  ko: number;
+  koThreshold: number;
+  koTimer: number;
+  koCount: number;
+  hitsTaken: number;
+  stiffness: number;
+  stun: number;
+  stagger: number;
+  grounded: boolean;
+}
+
+/**
+ * Everything the HUD and renderer need besides body transforms, as plain serializable data.
+ * In single-player the client reads it straight off the sim; in multiplayer the host sends it.
+ */
+export interface GameView {
+  tick: number;
+  match: {
+    phase: MatchPhase; timer: number; round: number; winsToWin: number;
+    wins: Record<number, number>; alive: number[]; roundWinner: number | null; matchWinner: number | null;
+  };
+  furnace: FurnaceState;
+  stampers: { x: number; z: number; phase: StamperPhase }[];
+  players: PlayerView[];
+}
+
 /** Knockouts get easier each time you've been knocked out this life. */
 export function koThreshold(f: Fighter) {
   const t = tuning;
@@ -939,11 +976,7 @@ export class Sim {
     return { x: o.x, y: o.y - 0.32, z: o.z };
   }
 
-  /** Back-compat debug helper: knock back along a ray with no shooter. */
-  shoveRay(origin: V3, dir: V3, impulse: number, maxDist = 60, ignorePlayer?: number): V3 | null {
-    const res = this.hitscan(ignorePlayer, origin, dir, maxDist, impulse, 1);
-    return res.hit ? res.point : null;
-  }
+
 
   private throwGrenade(id: number, r: Ragdoll, f: Fighter, dir: V3, _hand: 0 | 1) {
     const g = this.grenades.find((x) => !x.active);
@@ -1284,6 +1317,32 @@ export class Sim {
     return { object: b.isFixed() ? 'ledge' : 'something' };
   }
 
+  /** Snapshot of the game state for the HUD / renderer (and, later, the network). */
+  view(): GameView {
+    const m = this.match;
+    const players: PlayerView[] = [];
+    for (const [id, r] of this.players) {
+      const f = this.fighters.get(id)!;
+      players.push({
+        id, slot: f.slot, active: r.active,
+        hands: f.hands.map((h, i) => ({ item: h.item, ammo: h.ammo, grip: this.gripOf(id, i as 0 | 1) })),
+        activeHand: f.active,
+        ko: f.ko, koThreshold: koThreshold(f), koTimer: f.koTimer, koCount: f.koCount, hitsTaken: f.hitsTaken,
+        stiffness: r.stiffness, stun: r.stunTimer, stagger: r.staggerTimer, grounded: r.grounded,
+      });
+    }
+    return {
+      tick: this.tick,
+      match: {
+        phase: m.phase, timer: m.timer, round: m.round, winsToWin: m.winsToWin,
+        wins: Object.fromEntries(m.wins), alive: [...m.alive], roundWinner: m.roundWinner, matchWinner: m.matchWinner,
+      },
+      furnace: this.furnace.state,
+      stampers: this.stampers.map((st) => ({ x: st.x, z: st.z, phase: st.phase })),
+      players,
+    };
+  }
+
   /** Barrels that can still go off (for bots). */
   liveBarrels(): V3[] {
     return this.barrels.filter((b) => b.respawn === 0 && b.fuse === 0).map((b) => ({ ...b.body.translation() }));
@@ -1458,6 +1517,7 @@ export class Sim {
       rail: (pos, half, color) => this.addRail(pos, half, color),
       barrel: (pos) => this.addBarrel(pos),
       sign: (pos, half, color, label, onTop) => this.addSign(pos, half, color, label, onTop ?? false),
+      pickup: (kind, pos) => this.addPickup(kind, pos),
     });
     this.spawns = INCINERATOR.spawns;
   }

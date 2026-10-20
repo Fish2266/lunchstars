@@ -107,3 +107,80 @@ export function createDebugPanel(actions: { shoveDummy: () => void; reset: () =>
   gui.close();
   return gui;
 }
+
+/** Weapon, handling, knockout, gore and dummy folders (everything game-specific in the panel). */
+export function addGameFolders(gui: GUI, deps: {
+  weapons: typeof import('../sim/weapons').weapons;
+  explosive: typeof import('../sim/weapons').explosive;
+  punch: typeof import('../sim/weapons').punch;
+  handling: typeof import('../sim/weapons').handling;
+  goreSettings: { mode: string; amount: number };
+  bot: { mode: string };
+  giveMe: (kind: 'pistol' | 'shotgun' | 'grenade') => void;
+  giveDummy: () => void;
+  setPractice: (on: boolean) => void;
+  mopFloor: () => void;
+  hud: { showDebug: boolean };
+}) {
+  const { weapons, explosive, punch, handling } = deps;
+  const wf = gui.addFolder('Weapons');
+  for (const k of ['pistol', 'shotgun'] as const) {
+    const f = wf.addFolder(k);
+    f.add(weapons[k], 'knockback', 0, 40, 0.5);
+    f.add(weapons[k], 'pellets', 1, 16, 1);
+    f.add(weapons[k], 'spread', 0, 0.4, 0.005);
+    f.add(weapons[k], 'range', 2, 80, 1);
+    f.add(weapons[k], 'falloff', 0, 1, 0.01);
+    f.add(weapons[k], 'cooldown', 0.05, 2, 0.01);
+    f.add(weapons[k], 'lift', 0, 1.5, 0.01);
+    f.add(weapons[k], 'recoil', 0, 20, 0.1);
+    f.close();
+  }
+  const ef = wf.addFolder('grenade');
+  ef.add(explosive, 'throwSpeed', 2, 30, 0.5);
+  ef.add(explosive, 'throwLift', 0, 10, 0.1);
+  ef.add(explosive, 'fuse', 0.3, 4, 0.05);
+  ef.add(explosive, 'radius', 1, 8, 0.1);
+  ef.add(explosive, 'strength', 0, 40, 0.5);
+  ef.add(explosive, 'upBias', 0, 2, 0.05);
+  ef.add(explosive, 'stun', 0, 4, 0.05);
+  ef.close();
+  wf.add(punch, 'knockback', 0, 20, 0.5).name('punch knockback');
+  // Items only stay in a hand while its key is held, so this drops one into your right hand — hold that key to keep it.
+  const give = { weapon: 'pistol' as 'pistol' | 'shotgun' | 'grenade', give: () => deps.giveMe(give.weapon) };
+  wf.add(give, 'weapon', ['pistol', 'shotgun', 'grenade']).name('debug weapon');
+  wf.add(give, 'give').name('Spawn weapon at my hand');
+  const hf = wf.addFolder('handling');
+  hf.add(handling, 'dropThreshold', 5, 200, 1).name('hit to drop gun');
+  hf.add(handling, 'throwSpeed', 0, 25, 0.5).name('throw speed');
+  hf.add(handling, 'throwKnockback', 0, 30, 0.5).name('thrown gun bonk');
+  hf.add(handling, 'grabReach', 0.1, 1, 0.01).name('grab reach');
+  hf.close();
+
+  const botFolder = gui.addFolder('Dummy');
+  botFolder.add(deps.bot, 'mode', ['idle', 'chase', 'chase + shoot']).name('behavior');
+  botFolder.add({ arm: deps.giveDummy }, 'arm').name('Give dummy a pistol');
+  gui.add({ practice: false }, 'practice').name('Practice (no rounds)').onChange(deps.setPractice);
+  gui.add(deps.hud, 'showDebug').name('Debug HUD (KO, stats)');
+
+  const ko = gui.addFolder('Knockouts');
+  ko.add(tuning, 'koThreshold', 20, 300, 5).name('KO at');
+  ko.add(tuning, 'koPunch', 0, 60, 1).name('per punch');
+  ko.add(tuning, 'koHeadMult', 1, 4, 0.1).name('head multiplier');
+  ko.add(tuning, 'koShot', 0, 40, 1).name('per shot');
+  ko.add(tuning, 'koBonk', 0, 80, 1).name('thrown-gun bonk');
+  ko.add(tuning, 'koBlast', 0, 200, 5).name('explosion');
+  ko.add(tuning, 'koDecay', 0, 60, 1).name('drain / s');
+  ko.add(tuning, 'koDecayDelay', 0, 6, 0.1).name('drain delay');
+  ko.add(tuning, 'koRepeatEase', 0.3, 1, 0.01).name('repeat KO ease');
+  ko.add(tuning, 'koTimePerRepeat', 0, 5, 0.25).name('repeat KO +s');
+  ko.add(tuning, 'koTime', 0.5, 12, 0.5).name('KO seconds');
+  ko.add(tuning, 'koMash', 0, 0.5, 0.01).name('mash cuts');
+  ko.close();
+
+  const gf = gui.addFolder('Gore');
+  gf.add(deps.goreSettings, 'mode', ['blood', 'ketchup & mustard', 'off']);
+  gf.add(deps.goreSettings, 'amount', 0, 3, 0.05);
+  gf.add({ clear: deps.mopFloor }, 'clear').name('Mop the floor');
+  gf.close();
+}
