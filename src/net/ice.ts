@@ -21,6 +21,9 @@ export function iceServers(): Promise<RTCIceServer[]> {
   return cached;
 }
 
+/** `?relay=1` in the URL forces every connection through TURN (for testing the relay from one network). */
+export const forceRelay = typeof location !== 'undefined' && new URLSearchParams(location.search).has('relay');
+
 /** Whether a TURN relay is configured (for error messages). */
 export const hasTurn = !!(import.meta.env.VITE_TURN_CREDENTIALS_URL || import.meta.env.VITE_TURN_SERVERS);
 
