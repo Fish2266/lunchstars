@@ -15,6 +15,7 @@ import { explosive, handling, punch, weapons, type WeaponKind } from './sim/weap
 import { Gore, goreSettings } from './render/gore';
 import { animateModels, setBeltSpeed } from './render/models';
 import { INCINERATOR } from './sim/incinerator';
+import { PitFire } from './render/fire';
 
 const LOCAL_ID = 0;
 const DUMMY_ID = 1;
@@ -45,6 +46,7 @@ async function main() {
     return hit ? hit.point.y : -Infinity;
   };
   const gore = new Gore(renderer.scene, groundAt);
+  const pitFire = new PitFire(renderer.scene, INCINERATOR.pitCenter, INCINERATOR.pitHalf, -1.42);
   const crosshair = document.getElementById('crosshair')!;
   let hitMarkerTimer = 0;
   const controls = new Controls(renderer.gl.domElement);
@@ -227,6 +229,7 @@ async function main() {
     }
     effects.update(frameDt, transforms, { state: sim.furnace.state, center: INCINERATOR.pitCenter, half: INCINERATOR.pitHalf });
     renderer.setFurnace(sim.furnace.state);
+    pitFire.update(now / 1000, realDt, renderer.camera, sim.furnace.state);
     renderer.setStampers(sim.stampers);
     matchHud.update(realDt);
     gore.update(frameDt, transforms);

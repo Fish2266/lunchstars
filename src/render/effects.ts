@@ -94,11 +94,11 @@ export class Effects {
   private emberGeo = new THREE.SphereGeometry(1, 5, 4);
 
   /** A tiny glowing spark that floats up, wanders and fades. */
-  private ember(center: V3, half: number) {
+  private ember(center: V3, half: number, speed = 1) {
     const mat = new THREE.MeshBasicMaterial({ color: 0xffb347, transparent: true, depthWrite: false });
     const m = new THREE.Mesh(this.emberGeo, mat);
     const start = { x: center.x + (Math.random() - 0.5) * half * 2, y: center.y - 0.8, z: center.z + (Math.random() - 0.5) * half * 2 };
-    const vy = 1.2 + Math.random() * 1.6, sway = Math.random() * 6, life = 1.8 + Math.random() * 1.6;
+    const vy = (1.2 + Math.random() * 1.6) * speed, sway = Math.random() * 6, life = (1.8 + Math.random() * 1.6) / Math.sqrt(speed);
     const size = 0.015 + Math.random() * 0.02;
     this.add(m, life, (t) => {
       const s = t * life;
@@ -137,12 +137,12 @@ export class Effects {
         const c = furnace.center;
         this.smokePuff({ x: c.x + (Math.random() - 0.5) * furnace.half, y: c.y + 0.4, z: c.z + (Math.random() - 0.5) * furnace.half }, 0.35, 3.2);
       }
-      // Idle: flames licking up out of the pit. Warning: more of them. Burst: a column erupting.
+      // The flames themselves are shader sheets (fire.ts). Warnings and bursts throw extra sparks.
       const burst = furnace.state === 'burst';
-      this.jetAcc += dt * (burst ? 90 : furnace.state === 'warn' ? 30 : 12);
+      this.jetAcc += dt * (burst ? 120 : furnace.state === 'warn' ? 30 : 0);
       while (this.jetAcc >= 1) {
         this.jetAcc -= 1;
-        this.flameBlob(furnace.center, furnace.half, burst);
+        this.ember(furnace.center, furnace.half, burst ? 5 : 2);
       }
     }
     this.time += dt;
@@ -201,24 +201,6 @@ export class Effects {
       m.position.set(p.x + drift.x * t, p.y + t * 0.8, p.z + drift.z * t);
       m.scale.setScalar(size * (0.6 + t * 2.2));
       mat.opacity = 0.55 * (1 - t) * Math.min(1, t * 8);
-    });
-  }
-
-  /** One blob of flame rising out of the pit (a big fast column during a burst, embers while it warns). */
-  private flameBlob(center: V3, half: number, burst: boolean) {
-    const mat = new THREE.MeshBasicMaterial({ color: 0xffb040, transparent: true, depthWrite: false });
-    const m = new THREE.Mesh(this.puffGeo, mat);
-    const start = { x: center.x + (Math.random() - 0.5) * half * 1.8, y: center.y - 1.3, z: center.z + (Math.random() - 0.5) * half * 1.8 };
-    const out = burst ? 1.5 : 0.3;
-    const vx = (start.x - center.x) * out + (Math.random() - 0.5), vz = (start.z - center.z) * out + (Math.random() - 0.5);
-    const vy = burst ? 7 + Math.random() * 4 : 1.4 + Math.random() * 1.2;
-    const life = burst ? 0.55 + Math.random() * 0.25 : 0.9;
-    this.add(m, life, (t) => {
-      const s = t * life;
-      m.position.set(start.x + vx * s, start.y + vy * s, start.z + vz * s);
-      m.scale.setScalar(0.2 + t * 0.6);
-      mat.color.setHSL(0.1 - 0.08 * t, 1, 0.6 - 0.25 * t);
-      mat.opacity = 0.9 * (1 - t);
     });
   }
 
