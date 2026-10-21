@@ -83,13 +83,21 @@ export class NetHost {
   }
 
   /** Add a bot (run on the host like any player). Returns its id, or null if the room is full. */
-  addBot(name: string): number | null {
+  addBot(name: string, level: RosterEntry['level'] = 'normal'): number | null {
     if (!this.hasRoom) return null;
     const id = this.nextId++;
     this.sim.addPlayer(id);
-    this.roster.push({ id, name, bot: true, left: false });
+    this.roster.push({ id, name, bot: true, left: false, level });
     this.broadcastRoster();
     return id;
+  }
+
+  /** Change a bot's difficulty (so everyone's lobby shows it). */
+  setBotLevel(id: number, level: NonNullable<RosterEntry['level']>) {
+    const entry = this.roster.find((e) => e.id === id && e.bot);
+    if (!entry) return;
+    entry.level = level;
+    this.broadcastRoster();
   }
 
   /** Take a bot out of the game (it's parked like a player who left). */

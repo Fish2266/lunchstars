@@ -13,6 +13,30 @@ import { activeHand, koThreshold, type Sim } from '../sim/sim';
 import { INCINERATOR, type Belt } from '../sim/incinerator';
 
 export type BotMode = 'idle' | 'chase' | 'chase + shoot';
+export type Difficulty = 'easy' | 'normal' | 'hard';
+export const DIFFICULTIES: Difficulty[] = ['easy', 'normal', 'hard'];
+
+/**
+ * What makes a bot hard is mostly that it never makes human mistakes. Each level dials those back:
+ * it reacts to where you *were* a moment ago, turns and aims slower and wobblier, moves slower, punches less,
+ * doesn't always go for guns or drag knocked-out players to the fire, and now and then zones out.
+ */
+const LEVELS: Record<Difficulty, {
+  reaction: number; // seconds behind the target's real position
+  turn: number; // aim turn rate, rad/s
+  wobble: number; // aim wobble multiplier
+  aimTolerance: number; // how close the aim must be before shooting (rad)
+  speed: number; // movement multiplier
+  punchBeat: number; // seconds between punches
+  fireDelay: number; // multiplier on the gap between shots
+  gunChance: number; // chance (re-rolled every few seconds) it bothers going for a gun
+  haulChance: number; // chance it drags a knocked-out opponent to the fire (rolled per knockout)
+  daydream: number; // chance per second of zoning out for a moment
+}> = {
+  easy: { reaction: 0.45, turn: 2.6, wobble: 3.5, aimTolerance: 0.3, speed: 0.62, punchBeat: 0.8, fireDelay: 2.2, gunChance: 0.35, haulChance: 0.2, daydream: 0.12 },
+  normal: { reaction: 0.22, turn: 4.2, wobble: 2, aimTolerance: 0.18, speed: 0.82, punchBeat: 0.48, fireDelay: 1.45, gunChance: 0.7, haulChance: 0.55, daydream: 0.04 },
+  hard: { reaction: 0, turn: 7, wobble: 1, aimTolerance: 0.12, speed: 1, punchBeat: 0.3, fireDelay: 1, gunChance: 1, haulChance: 1, daydream: 0 },
+};
 
 type XZ = { x: number; z: number };
 type Rag = NonNullable<ReturnType<Sim['players']['get']>>;
@@ -36,8 +60,33 @@ export class Bot {
   state = 'idle';
 
   private retargetClock = 0;
+  difficulty: Difficulty = 'normal';
+  private clock = 0;
+  /** Where the target has been recently, so a slower bot can react to where it *was*. */
+  private seen: { t: number; id: number; x: number; y: number; z: number }[] = [];
+  private wantGun = true;
+  private gunRoll = 0;
+  /** The knockout we last decided about hauling (target id + their KO count), and the decision. */
+  private haulFor = '';
+  private willHaul = true;
+  private daydream = 0;
 
   constructor(private readonly sim: Sim, private readonly id: number, private targetId: number) {}
+
+  private get level() {
+    return LEVELS[this.difficulty];
+  }
+
+  /** The target's chest as this bot perceives it: `reaction` seconds late. */
+  private perceive(target: Rag) {
+    const p = target.chest.translation();
+    if (this.seen.length && this.seen[this.seen.length - 1].id !== this.targetId) this.seen = [];
+    this.seen.push({ t: this.clock, id: this.targetId, x: p.x, y: p.y, z: p.z });
+    const want = this.clock - this.level.reaction;
+    while (this.seen.length > 1 && this.seen[1].t <= want) this.seen.shift();
+    const s = this.seen[0];
+    return { x: s.x, y: s.y, z: s.z };
+  }
 
   /** With more than one opponent: go after the nearest one still standing (but finish a haul first). */
   private retarget(dt: number) {
@@ -73,21 +122,35 @@ export class Bot {
     }
     if (!me.active || f.koTimer > 0) { this.state = f.koTimer > 0 ? 'knocked out' : 'out'; return i; }
 
+    const lv = this.level;
+    this.clock += dt;
     const a = me.chest.translation();
     const tf = this.sim.fighters.get(this.targetId)!;
     const armed = !!(f.hands[0].item || f.hands[1].item);
     i.handL = !!f.hands[0].item;
     i.handR = !!f.hands[1].item;
+    // Easier bots don't always bother with guns (re-decided every few seconds)...
+    this.gunRoll -= dt;
+    if (this.gunRoll <= 0) { this.gunRoll = 4; this.wantGun = Math.random() < lv.gunChance; }
+    // ...or with dragging a knocked-out opponent to the fire (decided once per knockout).
+    const koKey = `${this.targetId}:${tf.koCount}`;
+    if (tf.koTimer > 0 && this.haulFor !== koKey) { this.haulFor = koKey; this.willHaul = Math.random() < lv.haulChance; }
 
     // 1. Stay alive (while hauling, the bot walks ahead of the body up the belt, so it lets itself get closer).
-    const hauling = tf.koTimer > 0 && target.active && !armed;
+    const hauling = tf.koTimer > 0 && target.active && !armed && this.willHaul;
     if (this.escape(i, me, a, hauling)) { this.state = 'escaping'; return this.finish(i, me, a, dt); }
 
-    // 2. Opponent knocked out: feed them to the fire.
+    // Now and then an easier bot just... zones out for a moment.
+    this.daydream -= dt;
+    if (this.daydream <= 0 && Math.random() < lv.daydream * dt) this.daydream = 0.6 + Math.random() * 0.8;
+    if (this.daydream > 0) { this.state = 'zoned out'; i.fire = false; return this.finish(i, me, a, dt); }
+
+    // 2. Opponent knocked out: feed them to the fire — or, if it doesn't fancy it, wait for them to get up.
     if (hauling) { this.state = 'hauling'; this.haul(i, me, target); return this.finish(i, me, a, dt); }
     if (!target.active) { this.state = 'waiting'; return this.finish(i, me, a, dt); }
+    if (tf.koTimer > 0 && !armed) { this.state = 'waiting for them to get up'; this.aimAt(i, a, target.chest.translation(), 0, dt); return this.finish(i, me, a, dt); }
 
-    const b = target.chest.translation();
+    const b = this.perceive(target);
     const dist = Math.hypot(b.x - a.x, b.z - a.z);
     const hi = activeHand(f);
     const item = hi !== null ? f.hands[hi].item : null;
@@ -115,14 +178,14 @@ export class Bot {
       if (this.mode === 'chase + shoot' && inRange && this.aimSettled(i, a, aimAt)) {
         // Pulse the trigger so the sim sees separate presses.
         this.fireHold -= dt;
-        if (this.fireHold <= -(item === 'shotgun' ? 0.9 : 0.45)) this.fireHold = 0.08;
+        if (this.fireHold <= -(item === 'shotgun' ? 0.9 : 0.45) * lv.fireDelay) this.fireHold = 0.08;
         i.fire = this.fireHold > 0;
       }
       return this.finish(i, me, a, dt);
     }
 
     // 4. Unarmed: get a gun if one's safely in reach (and they aren't right on top of us).
-    if (dist > 3 || hurt) {
+    if ((dist > 3 || hurt) && this.wantGun) {
       let best: XZ | null = null, bestD = Infinity;
       for (const w of this.sim.availableWeapons()) {
         if (this.nearPit(w.pos, 1.6)) continue; // too close to the fire to be worth it
@@ -154,8 +217,8 @@ export class Bot {
     this.aimAt(i, a, b, -0.1, dt);
     if (dist < 1.6) {
       this.punchClock += dt;
-      const beat = Math.floor(this.punchClock / 0.3);
-      const on = (this.punchClock % 0.3) < 0.08;
+      const beat = Math.floor(this.punchClock / lv.punchBeat);
+      const on = (this.punchClock % lv.punchBeat) < 0.08;
       i.handL = on && beat % 2 === 0;
       i.handR = on && beat % 2 === 1;
     }
@@ -263,19 +326,21 @@ export class Bot {
     const pitch = Math.atan2(p.y - ay, Math.hypot(p.x - a.x, p.z - a.z)) + lob;
     let dy = yaw - this.aimYaw;
     dy = Math.atan2(Math.sin(dy), Math.cos(dy));
-    const turn = 7 * dt;
+    const lv = this.level;
+    const turn = lv.turn * dt;
     this.aimYaw += Math.max(-turn, Math.min(turn, dy));
-    this.aimPitch += (pitch - this.aimPitch) * Math.min(1, 10 * dt);
+    this.aimPitch += (pitch - this.aimPitch) * Math.min(1, lv.turn * 1.4 * dt);
     this.wobble += dt;
-    i.aimYaw = this.aimYaw + Math.sin(this.wobble * 1.7) * 0.035 + Math.sin(this.wobble * 4.1) * 0.015;
-    i.aimPitch = this.aimPitch + Math.sin(this.wobble * 2.3) * 0.02;
+    const w = lv.wobble;
+    i.aimYaw = this.aimYaw + (Math.sin(this.wobble * 1.7) * 0.035 + Math.sin(this.wobble * 4.1) * 0.015) * w;
+    i.aimPitch = this.aimPitch + Math.sin(this.wobble * 2.3) * 0.02 * w;
   }
 
   /** Only pull the trigger once the aim has roughly caught up. */
   private aimSettled(i: PlayerInput, a: XZ, p: XZ) {
     const want = Math.atan2(p.x - a.x, p.z - a.z);
     const d = Math.atan2(Math.sin(want - i.aimYaw), Math.cos(want - i.aimYaw));
-    return Math.abs(d) < 0.12;
+    return Math.abs(d) < this.level.aimTolerance;
   }
 
   // ------------------------------------------------------------------ map knowledge
@@ -347,8 +412,8 @@ export class Bot {
       if (!pick) { i.moveX = 0; i.moveZ = 0; return; }
       mx = pick.x; mz = pick.z;
     }
-    i.moveX = mx * speed;
-    i.moveZ = mz * speed;
+    i.moveX = mx * speed * this.level.speed;
+    i.moveZ = mz * speed * this.level.speed;
   }
 }
 

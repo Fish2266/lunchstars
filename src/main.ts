@@ -9,8 +9,8 @@
 // Everything after the "world state" step below reads only the transforms, the view and the events.
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
-import { loadSettings } from './client/bindings';
-import { Bot } from './client/bot';
+import { loadSettings, saveSettings, settings } from './client/bindings';
+import { Bot, DIFFICULTIES } from './client/bot';
 import { CameraRig } from './client/camera';
 import { Controls } from './client/controls';
 import { addGameFolders, createDebugPanel, DEBUG, loadSavedTuning } from './client/debug';
@@ -78,8 +78,9 @@ async function main() {
     sim.addPlayer(BOT_ID);
     const bot = new Bot(sim, BOT_ID, 0);
     bot.mode = 'chase + shoot';
+    bot.difficulty = settings.botDifficulty;
     bots.set(BOT_ID, bot);
-    roster.push({ id: 0, name: 'Host', bot: false, left: false }, { id: BOT_ID, name: 'Bot', bot: true, left: false });
+    roster.push({ id: 0, name: 'Host', bot: false, left: false }, { id: BOT_ID, name: 'Bot', bot: true, left: false, level: bot.difficulty });
   }
   const firstBot = bots.get(BOT_ID) ?? new Bot(sim, -1, -1);
 
@@ -134,11 +135,30 @@ async function main() {
   menu.onEndMatch = () => { sim.endMatch('host'); gore.fadeAll(); updateLobby(); };
   menu.matchRunning = () => sim.match.phase !== 'practice';
   menu.onAddBot = () => {
-    const id = host?.addBot('Bot');
+    const id = host?.addBot('Bot', settings.botDifficulty);
     if (id == null) return;
     const b = new Bot(sim, id, localId);
     b.mode = firstBot.mode === 'idle' ? 'chase + shoot' : firstBot.mode;
+    b.difficulty = settings.botDifficulty;
     bots.set(id, b);
+  };
+  // ‹ › pickers: 'bot' = the solo / default difficulty, 'bot:<id>' = one bot in a hosted game.
+  const step = <T,>(list: readonly T[], cur: T, dir: number) => list[(list.indexOf(cur) + dir + list.length) % list.length];
+  menu.onPick = (key, dir) => {
+    if (key === 'bot') {
+      settings.botDifficulty = step(DIFFICULTIES, settings.botDifficulty, dir);
+      saveSettings();
+      // Solo: the bot changes right away. (Hosting: new bots start at this level; each has its own picker.)
+      if (mode === 'solo') for (const b of bots.values()) b.difficulty = settings.botDifficulty;
+      const entry = roster.find((r) => r.bot);
+      if (mode === 'solo' && entry) entry.level = settings.botDifficulty;
+    } else if (key.startsWith('bot:') && host) {
+      const id = Number(key.slice(4));
+      const b = bots.get(id);
+      if (!b) return;
+      b.difficulty = step(DIFFICULTIES, b.difficulty, dir);
+      host.setBotLevel(id, b.difficulty);
+    }
   };
   menu.onRemoveBot = (id) => { host?.removeBot(id); bots.delete(id); };
   if (mode === 'client') { updateLobby(); menu.showPause(); }

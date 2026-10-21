@@ -25,6 +25,8 @@ export interface RosterEntry {
   bot: boolean;
   /** Left the game (their entities stay so indices don't shift; they're just parked). */
   left: boolean;
+  /** Bots: difficulty (shown in the lobby). */
+  level?: 'easy' | 'normal' | 'hard';
 }
 
 export type ReliableMsg =

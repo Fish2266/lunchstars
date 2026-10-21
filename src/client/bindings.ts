@@ -47,6 +47,8 @@ export const settings = {
   invertY: false,
   /** The controls reminder along the bottom-left of the screen. */
   showControls: true,
+  /** Difficulty for solo bots, and for new bots in a hosted game. */
+  botDifficulty: 'normal' as 'easy' | 'normal' | 'hard',
 };
 
 export function loadSettings() {
@@ -60,6 +62,7 @@ export function loadSettings() {
     if (typeof saved.sensitivity === 'number') settings.sensitivity = saved.sensitivity;
     if (typeof saved.invertY === 'boolean') settings.invertY = saved.invertY;
     if (typeof saved.showControls === 'boolean') settings.showControls = saved.showControls;
+    if (['easy', 'normal', 'hard'].includes(saved.botDifficulty)) settings.botDifficulty = saved.botDifficulty;
   } catch { /* ignore */ }
 }
 

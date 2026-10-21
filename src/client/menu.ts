@@ -38,7 +38,28 @@ const CSS = `
 #menu .player span { flex: 1; }
 #menu .player .key { padding: 4px 10px; }
 #menu button:disabled { opacity: 0.6; cursor: default; }
+#menu .pick { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 14px; }
+#menu .pick > span { flex: 1; }
+#menu .pick b { min-width: 92px; text-align: center; font-size: 15px; }
+#menu .pick .arrow { width: 34px; height: 34px; background: #343b66; color: #fff; font-size: 20px; line-height: 1; padding: 0; }
+#menu .pick .arrow:hover { background: #4a5390; }
+#menu .pick.compact { margin-top: 0; }
+#menu .pick.compact b { min-width: 64px; font-size: 13px; }
+#menu .pick.compact .arrow { width: 26px; height: 26px; font-size: 16px; }
+#menu .lvl { font-size: 13px; opacity: 0.8; }
 `;
+
+/** A "label  ‹ value ›" row; clicks reach `Menu.onPick(key, ±1)`. */
+function picker(text: string, value: string, key: string, compact = false) {
+  return `<div class="pick${compact ? ' compact' : ''}">${text ? `<span>${escapeHtml(text)}</span>` : ''}
+    <button class="arrow" data-pick="${key}" data-step="-1" aria-label="Previous">‹</button>
+    <b>${escapeHtml(value)}</b>
+    <button class="arrow" data-pick="${key}" data-step="1" aria-label="Next">›</button></div>`;
+}
+
+function label(s: string) {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
 
 function escapeHtml(s: string) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
@@ -70,6 +91,8 @@ export class Menu {
   onHost: () => Promise<void> = async () => {};
   onStartMatch: () => void = () => {};
   onEndMatch: () => void = () => {};
+  /** An arrow picker was clicked: `key` says which ('bot', 'bot:<id>', or a wardrobe slot), `step` is -1 / +1. */
+  onPick: (key: string, step: number) => void = () => {};
   /** Whether a match (rounds) is underway, vs. free play — for the solo pause card. */
   matchRunning: () => boolean = () => false;
   onAddBot: () => void = () => {};
@@ -125,6 +148,7 @@ export class Menu {
         <div class="card">
           <h1>LUNCH STARS</h1>
           <button class="big" data-solo>Play solo</button>
+          ${picker('Bot difficulty', label(settings.botDifficulty), 'bot')}
           <h2>Online</h2>
           <button class="plain" data-host>Host a game</button>
           <div class="join"><input data-code maxlength="4" placeholder="CODE" value="${escapeHtml(code)}" spellcheck="false" autocomplete="off">
@@ -152,6 +176,7 @@ export class Menu {
           <h2>Match</h2>
           <button class="plain" data-start>${running ? 'Restart match' : 'Start a new match'}</button>
           ${running ? `<button class="plain" data-end>End match (free play)</button>` : ''}
+          ${picker('Bot difficulty', label(settings.botDifficulty), 'bot')}
           <button class="plain" data-quit>Quit to title screen</button>
           <h2>More</h2>
           <button class="plain" data-host>Host this as an online game</button>
@@ -171,6 +196,7 @@ export class Menu {
       const players = l ? l.roster.map((r, slot) => (r.left ? '' : `
         <div class="player"><i style="background:${slotColor(slot)}"></i>
           <span>${slotName(slot)}${r.id === l.you ? ' (you)' : ''}${r.bot ? ' · bot' : ''}${slot === 0 ? ' · host' : ''}</span>
+          ${r.bot ? (isHost ? picker('', label(r.level ?? 'normal'), `bot:${r.id}`, true) : `<span class="lvl">${label(r.level ?? 'normal')}</span>`) : ''}
           ${isHost && r.bot ? `<button class="key" data-kick="${r.id}">Remove</button>` : ''}</div>`)).join('') : '';
       this.root.innerHTML = `
         <div class="card">
@@ -199,6 +225,19 @@ export class Menu {
       for (const el of this.root.querySelectorAll<HTMLButtonElement>('[data-kick]')) el.onclick = () => this.onRemoveBot(Number(el.dataset.kick));
     }
     this.on('[data-settings]', () => this.showSettings());
+    this.wirePickers();
+  }
+
+  /** ‹ › arrow pickers: tell main which one and which way. */
+  private wirePickers() {
+    for (const el of this.root.querySelectorAll<HTMLButtonElement>('[data-pick]')) {
+      el.onclick = () => { this.onPick(el.dataset.pick!, Number(el.dataset.step)); this.refreshPickers(); };
+    }
+  }
+
+  /** Re-draw whatever screen is showing so pickers show their new values. */
+  private refreshPickers() {
+    if (this.screen === 'pause') this.showPause();
   }
 
   /** Re-draw the lobby card if it's showing (someone joined or left). */
