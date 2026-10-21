@@ -34,6 +34,16 @@ export class Hud {
       + `<b>${keyFor('reset')}</b> reset · <b>Esc</b> menu`;
   }
 
+  private spectating = document.createElement('div');
+
+  /** "Spectating Blue" banner while you're out (null hides it). */
+  setSpectating(who: string | null, keys = '') {
+    if (!this.spectating.isConnected) { this.spectating.id = 'spectating'; document.body.appendChild(this.spectating); }
+    const html = who ? `<div class="who">Spectating <b>${esc(who)}</b></div><div class="keys">${esc(keys)}</div>` : '';
+    if (this.spectating.innerHTML !== html) this.spectating.innerHTML = html;
+    this.spectating.style.display = who ? 'block' : 'none';
+  }
+
   update(view: GameView, extraDebug: (p: PlayerView) => string = () => '') {
     const me = view.players.find((p) => p.id === this.localId);
     if (me) this.updateHands(me);

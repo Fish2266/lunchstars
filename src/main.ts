@@ -9,7 +9,7 @@
 // Everything after the "world state" step below reads only the transforms, the view and the events.
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
-import { loadSettings, saveSettings, settings } from './client/bindings';
+import { keyFor, loadSettings, saveSettings, settings } from './client/bindings';
 import { Bot, DIFFICULTIES } from './client/bot';
 import { CameraRig } from './client/camera';
 import { Controls } from './client/controls';
@@ -112,6 +112,10 @@ async function main() {
   addEventListener('pointerdown', unlockAudio);
   addEventListener('keydown', unlockAudio);
   let lastCountdown = -1;
+  /** Spectating (while you're out): whose camera, or the arena overview. */
+  let spectate: number | null = null;
+  let overview = false;
+  let overviewSpin = 0;
   const camRight = new THREE.Vector3();
   const crosshair = document.getElementById('crosshair')!;
   let hitMarkerTimer = 0;
@@ -314,6 +318,9 @@ async function main() {
     if (authority && sim.match.phase === 'matchOver' && controls.consume('jump')) sim.startMatch(); // rematch
     if (controls.consume('shoveDummy') && DEBUG) shoveDummy();
     if (controls.consume('panel') && DEBUG) gui.show(gui._hidden);
+    // Spectator keys (read here: taps are cleared once input has gone to the sim).
+    const outNow = !!lastView && lastView.players.some((p) => p.id === localId && !p.active) && !menu.open;
+    const specKeys = outNow ? { next: controls.consume('handR'), prev: controls.consume('handL'), toggle: controls.consume('jump') } : null;
 
     myInput = controls.read();
     crosshairAim(myInput);
@@ -369,13 +376,38 @@ async function main() {
     animateModels(now / 1000);
     renderer.applyTransforms(transforms);
 
-    // Camera: follow yourself, or whoever's left once you're out.
+    // Camera: follow yourself — or, once you're out, spectate: watch another player (Q / E to switch) or
+    // an overview of the arena (jump to toggle).
     const meView = view?.players.find((p) => p.id === localId);
     let follow = meView?.active ? aimOrigin(localId) : null;
+    let range = 1, pitch = controls.pitch, yaw = controls.yaw;
+    const spectating = !!view && !!meView && !meView.active && !menu.open;
+    if (spectating) {
+      const others = view!.players.filter((p) => p.active && !p.left && p.id !== localId).map((p) => p.id);
+      if (spectate === null || !others.includes(spectate)) spectate = others[0] ?? null;
+      if (spectate !== null && others.length) {
+        const k = others.indexOf(spectate);
+        if (specKeys?.next) spectate = others[(k + 1) % others.length];
+        if (specKeys?.prev) spectate = others[(k - 1 + others.length) % others.length];
+      }
+      if (specKeys?.toggle) overview = !overview;
+      if (overview || spectate === null) {
+        // Slowly circling the pit, high up; the mouse can still turn it.
+        overviewSpin += realDt * 0.12;
+        follow = { x: INCINERATOR.pitCenter.x, y: 1.2, z: INCINERATOR.pitCenter.z };
+        range = 3.3; yaw = controls.yaw + overviewSpin; pitch = -0.62;
+      } else {
+        follow = aimOrigin(spectate);
+      }
+      hud.setSpectating(overview || spectate === null ? 'Overview' : matchHud.nameOf(spectate),
+        `${keyFor('handL')} / ${keyFor('handR')} switch player · ${keyFor('jump')} ${overview ? 'follow a player' : 'overview'}`);
+    } else {
+      hud.setSpectating(null);
+    }
     if (!follow && view) for (const p of view.players) if (p.active && !p.left && (follow = aimOrigin(p.id))) break;
     // Sinking into the fire: the camera stays above the lava and watches you go under.
     if (follow) follow = { ...follow, y: Math.max(follow.y, INCINERATOR.lavaY + 0.6) };
-    cam.update(follow ?? { x: 0, y: 1.6, z: 1 }, controls.yaw, controls.pitch, effects.shake, frameDt, realDt);
+    cam.update(follow ?? { x: 0, y: 1.6, z: 1 }, yaw, pitch, effects.shake, frameDt, realDt, range);
     // Squeezed right up against your own character (a wall or ceiling behind you): don't fill the screen with it.
     renderer.setPlayerHidden(localId, cam.distance < 1.0);
     renderer.focusShadow(cam.pivot);

@@ -26,13 +26,15 @@ export class CameraRig {
    * @param yaw/pitch  look direction from the controls
    * @param shake  0..1ish, from effects
    */
-  update(follow: V3, yaw: number, pitch: number, shake: number, dt: number, realDt: number) {
-    this.pivot.lerp(this.goal.set(follow.x, follow.y, follow.z), 1 - Math.exp(-dt * 12));
+  update(follow: V3, yaw: number, pitch: number, shake: number, dt: number, realDt: number, range = 1) {
+    // Smoothed, so switching who you're watching glides over instead of cutting.
+    this.pivot.lerp(this.goal.set(follow.x, follow.y, follow.z), 1 - Math.exp(-dt * (range > 1 ? 3 : 12)));
     const cp = Math.cos(pitch), sp = Math.sin(pitch);
     const fx = Math.sin(yaw) * cp, fy = sp, fz = Math.cos(yaw) * cp;
     const rx = -Math.cos(yaw), rz = Math.sin(yaw);
-    // Where the camera wants to be, relative to the pivot.
-    this.offset.set(-fx * DIST + rx * SHOULDER, -fy * DIST + RISE, -fz * DIST + rz * SHOULDER);
+    // Where the camera wants to be, relative to the pivot. (`range` > 1 pulls back for an overview, centred.)
+    const d = DIST * range, side = range > 1 ? 0 : SHOULDER;
+    this.offset.set(-fx * d + rx * side, -fy * d + RISE, -fz * d + rz * side);
     const want = this.offset.length();
     this.offset.multiplyScalar(1 / want);
     // Don't clip through the level: pull in front of anything between the pivot and the camera.
