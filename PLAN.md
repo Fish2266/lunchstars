@@ -20,6 +20,17 @@ Work one phase at a time. A phase is done only when its "done when" is true. Com
 - Maps v1: "Cafeteria" (floating floor over a pit) + one more.
 - Mode: last one standing, best of 5.
 
+## Phase 6 (started): polish
+- **Bot difficulty** easy / normal / hard (`client/bot.ts` LEVELS): reaction delay, aim speed and wobble, movement
+  speed, punch/shot rate, how often it goes for guns or hauls you to the fire, and zoning out. Hard = the old bot.
+- **Sound** (`client/audio.ts`): all synthesized Web Audio, positional, driven by SimEvents; fire-pit ambience;
+  volume slider.
+- **Emotes** on 1–4 (wave, dance, taunt, cheer): ragdoll arm poses, so they stay physical and sync via snapshots.
+- **Spectator camera** while out: Q / E to switch player, jump for an arena overview.
+- **Cosmetics** (`render/cosmetics.ts`, `client/wardrobe.ts`): hats, faces, tops, bottoms; Customize screen with a
+  3D preview; synced online through the roster.
+- Next ideas: map plug-in refactor → Cafeteria map, map voting, gamepad, names, unlocks.
+
 ## Phase 5: online play (done, first pass)
 - Title screen: Play solo / Host a game / Join with a 4-letter code. Hosting opens room `lunchstars-CODE` on the public PeerJS broker; the invite link is `?join=CODE`.
 - Host lobby: player list, add/remove bots, start or restart the match. Before the match starts everyone messes around in practice. The game never pauses for the host.
