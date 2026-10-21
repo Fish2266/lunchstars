@@ -17,6 +17,7 @@ import { addGameFolders, createDebugPanel, DEBUG, loadSavedTuning } from './clie
 import { Hud } from './client/hud';
 import { MatchHud } from './client/matchHud';
 import { Menu, type MenuMode } from './client/menu';
+import { Sound } from './client/audio';
 import { NetClient } from './net/client';
 import { NetHost } from './net/host';
 import type { RosterEntry } from './net/protocol';
@@ -103,6 +104,15 @@ async function main() {
   const matchHud = new MatchHud(localId);
   matchHud.canRematch = mode !== 'client';
   const hud = new Hud(localId, (id) => matchHud.nameOf(id));
+  const sound = new Sound();
+  sound.setVolume(settings.volume);
+  menu.onVolume = (v) => sound.setVolume(v);
+  // Browsers only allow audio after the player interacts with the page.
+  const unlockAudio = () => sound.unlock();
+  addEventListener('pointerdown', unlockAudio);
+  addEventListener('keydown', unlockAudio);
+  let lastCountdown = -1;
+  const camRight = new THREE.Vector3();
   const crosshair = document.getElementById('crosshair')!;
   let hitMarkerTimer = 0;
 
@@ -330,6 +340,7 @@ async function main() {
 
     for (const e of events) {
       effects.handle(e);
+      sound.handle(e, chestPos, localId);
       matchHud.handle(e);
       if (e.type === 'countdown') gore.fadeAll();
       if (e.type === 'hit') {
@@ -368,6 +379,15 @@ async function main() {
     // Squeezed right up against your own character (a wall or ceiling behind you): don't fill the screen with it.
     renderer.setPlayerHidden(localId, cam.distance < 1.0);
     renderer.focusShadow(cam.pivot);
+    // Sound: hear from your character, panned by where the camera faces.
+    camRight.set(1, 0, 0).applyQuaternion(renderer.camera.quaternion);
+    sound.listen(cam.pivot, camRight);
+    sound.update(INCINERATOR.pitCenter, furnace);
+    if (view?.match.phase === 'countdown') {
+      const n = Math.ceil(view.match.timer);
+      if (n !== lastCountdown && n > 0) sound.countdownBeep();
+      lastCountdown = n;
+    } else lastCountdown = -1;
     renderer.render();
 
     // HUD.

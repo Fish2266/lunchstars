@@ -49,6 +49,8 @@ export const settings = {
   showControls: true,
   /** Difficulty for solo bots, and for new bots in a hosted game. */
   botDifficulty: 'normal' as 'easy' | 'normal' | 'hard',
+  /** Master sound volume, 0..1. */
+  volume: 0.7,
 };
 
 export function loadSettings() {
@@ -63,6 +65,7 @@ export function loadSettings() {
     if (typeof saved.invertY === 'boolean') settings.invertY = saved.invertY;
     if (typeof saved.showControls === 'boolean') settings.showControls = saved.showControls;
     if (['easy', 'normal', 'hard'].includes(saved.botDifficulty)) settings.botDifficulty = saved.botDifficulty;
+    if (typeof saved.volume === 'number') settings.volume = Math.max(0, Math.min(1, saved.volume));
   } catch { /* ignore */ }
 }
 

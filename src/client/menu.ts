@@ -93,6 +93,7 @@ export class Menu {
   onEndMatch: () => void = () => {};
   /** An arrow picker was clicked: `key` says which ('bot', 'bot:<id>', or a wardrobe slot), `step` is -1 / +1. */
   onPick: (key: string, step: number) => void = () => {};
+  onVolume: (v: number) => void = () => {};
   /** Whether a match (rounds) is underway, vs. free play — for the solo pause card. */
   matchRunning: () => boolean = () => false;
   onAddBot: () => void = () => {};
@@ -302,6 +303,9 @@ export class Menu {
         <div class="slider">Sensitivity <input type="range" min="0.2" max="3" step="0.05" value="${settings.sensitivity}" data-sens>
           <span data-sens-val>${settings.sensitivity.toFixed(2)}</span></div>
         <div class="slider"><label><input type="checkbox" data-invert ${settings.invertY ? 'checked' : ''}> Invert look up/down</label></div>
+        <h2>Sound</h2>
+        <div class="slider">Volume <input type="range" min="0" max="1" step="0.05" value="${settings.volume}" data-volume>
+          <span data-volume-val>${Math.round(settings.volume * 100)}%</span></div>
         <h2>Screen</h2>
         <div class="slider"><label><input type="checkbox" data-show-controls ${settings.showControls ? 'checked' : ''}> Show controls at the bottom of the screen</label></div>
         <div class="footer">
@@ -326,6 +330,13 @@ export class Menu {
     this.root.querySelector<HTMLInputElement>('[data-invert]')!.onchange = (e) => {
       settings.invertY = (e.target as HTMLInputElement).checked;
       saveSettings();
+    };
+    const vol = this.root.querySelector<HTMLInputElement>('[data-volume]')!;
+    vol.oninput = () => {
+      settings.volume = Number(vol.value);
+      this.root.querySelector('[data-volume-val]')!.textContent = `${Math.round(settings.volume * 100)}%`;
+      saveSettings();
+      this.onVolume(settings.volume);
     };
     this.root.querySelector<HTMLInputElement>('[data-show-controls]')!.onchange = (e) => {
       settings.showControls = (e.target as HTMLInputElement).checked;
