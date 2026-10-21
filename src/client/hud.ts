@@ -29,6 +29,7 @@ export class Hud {
       + `<b>${keyFor('handL')}</b> / <b>${keyFor('handR')}</b> left / right hand: tap to punch, hold to grab or hold a gun (let go = drop)<br />`
       + `Hanging on a ledge: hold <b>${keyFor('jump')}</b> to pull up, swap hands to climb · `
       + `<b>${keyFor('fire')}</b> shoot / throw grenade · <b>${keyFor('cycle')}</b> switch hands · `
+      + `<b>${keyFor('emote1')}–${keyFor('emote4')}</b> emotes · `
       + (DEBUG ? `<b>${keyFor('shoveDummy')}</b> shove dummy · <b>${keyFor('panel')}</b> tuning · ` : '')
       + `<b>${keyFor('reset')}</b> reset · <b>Esc</b> menu`;
   }

@@ -70,6 +70,8 @@ export class Bot {
   private haulFor = '';
   private willHaul = true;
   private daydream = 0;
+  private cheeredRound = -1;
+  private taunted = '';
 
   constructor(private readonly sim: Sim, private readonly id: number, private targetId: number) {}
 
@@ -109,7 +111,10 @@ export class Bot {
 
   think(dt: number): PlayerInput {
     const i = this.input;
-    i.moveX = 0; i.moveZ = 0; i.fire = false; i.jump = false; i.cycle = false;
+    i.moveX = 0; i.moveZ = 0; i.fire = false; i.jump = false; i.cycle = false; i.emote = 0;
+    // Won the round: cheer (once).
+    const m = this.sim.match;
+    if (m.phase === 'roundOver' && m.roundWinner === this.id && this.cheeredRound !== m.round) { this.cheeredRound = m.round; i.emote = 4; }
     this.retarget(dt);
     const me = this.sim.players.get(this.id);
     const target = this.sim.players.get(this.targetId);
@@ -148,6 +153,7 @@ export class Bot {
     // 2. Opponent knocked out: feed them to the fire — or, if it doesn't fancy it, wait for them to get up.
     if (hauling) { this.state = 'hauling'; this.haul(i, me, target); return this.finish(i, me, a, dt); }
     if (!target.active) { this.state = 'waiting'; return this.finish(i, me, a, dt); }
+    if (tf.koTimer > 0 && !armed && this.taunted !== koKey && Math.random() < 0.4) { this.taunted = koKey; i.emote = 3; }
     if (tf.koTimer > 0 && !armed) { this.state = 'waiting for them to get up'; this.aimAt(i, a, target.chest.translation(), 0, dt); return this.finish(i, me, a, dt); }
 
     const b = this.perceive(target);

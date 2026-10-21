@@ -12,7 +12,7 @@
 import type { PlayerInput } from '../sim/input';
 import type { GameView, SimEvent } from '../sim/sim';
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 /** Peer ids on the public PeerJS broker are `lunchstars-<CODE>` for a room's host. */
 export const PEER_PREFIX = 'lunchstars-';
 export const MAX_PLAYERS = 4;
@@ -259,9 +259,15 @@ export function decodeSnapshot(buf: ArrayBuffer, prev: Snapshot | null): Snapsho
 
 /** The buttons. Besides its current state, each has a press counter so a quick tap survives lost or bunched packets. */
 export const BUTTONS = ['jump', 'handL', 'handR', 'fire', 'cycle'] as const;
-const INPUT_BYTES = 22 + BUTTONS.length;
+/** In the press-count list, after the buttons: how many emotes have been started. */
+export const EMOTE_PRESS = BUTTONS.length;
+const EMOTE_AT = 22 + BUTTONS.length + 1;
+const INPUT_BYTES = EMOTE_AT + 1;
 
-/** u8 type, u32 seq, f32 moveX, moveZ, aimYaw, aimPitch, u8 button flags, u8 press count per button — 27 bytes. */
+/**
+ * u8 type, u32 seq, f32 moveX, moveZ, aimYaw, aimPitch, u8 button flags, u8 press count per button and one for
+ * emotes, u8 emote held — 29 bytes. `presses` = BUTTONS.length button counts, then the emote count.
+ */
 export function encodeInput(seq: number, input: PlayerInput, presses: readonly number[]): ArrayBuffer {
   const buf = new ArrayBuffer(INPUT_BYTES);
   const v = new DataView(buf);
@@ -270,8 +276,10 @@ export function encodeInput(seq: number, input: PlayerInput, presses: readonly n
   v.setFloat32(5, input.moveX); v.setFloat32(9, input.moveZ);
   v.setFloat32(13, input.aimYaw); v.setFloat32(17, input.aimPitch);
   let f = 0;
-  BUTTONS.forEach((k, i) => { if (input[k]) f |= 1 << i; v.setUint8(22 + i, presses[i] & 255); });
+  BUTTONS.forEach((k, i) => { if (input[k]) f |= 1 << i; });
+  for (let i = 0; i <= EMOTE_PRESS; i++) v.setUint8(22 + i, (presses[i] ?? 0) & 255);
   v.setUint8(21, f);
+  v.setUint8(EMOTE_AT, input.emote & 7);
   return buf;
 }
 
@@ -284,7 +292,8 @@ export function decodeInput(buf: ArrayBuffer): { seq: number; input: PlayerInput
     moveX: v.getFloat32(5), moveZ: v.getFloat32(9), aimYaw: v.getFloat32(13), aimPitch: v.getFloat32(17),
   } as PlayerInput;
   BUTTONS.forEach((k, i) => { input[k] = !!(f & (1 << i)); });
-  const presses = BUTTONS.map((_, i) => v.getUint8(22 + i));
+  const presses = Array.from({ length: EMOTE_PRESS + 1 }, (_, i) => v.getUint8(22 + i));
+  input.emote = Math.min(4, v.getUint8(EMOTE_AT));
   // Never trust a peer's floats blindly.
   const ok = (x: number) => Number.isFinite(x);
   if (!ok(input.moveX) || !ok(input.moveZ) || !ok(input.aimYaw) || !ok(input.aimPitch)) return null;

@@ -15,8 +15,10 @@ export interface PlayerInput {
   fire: boolean;
   /** Switch active item between hands (R). Edge-detected. */
   cycle: boolean;
+  /** Emote key held: 0 = none, 1..4 = wave, dance, taunt, cheer. A new press starts it. */
+  emote: number;
 }
 
 export function emptyInput(): PlayerInput {
-  return { moveX: 0, moveZ: 0, aimYaw: 0, aimPitch: 0, jump: false, handL: false, handR: false, fire: false, cycle: false };
+  return { moveX: 0, moveZ: 0, aimYaw: 0, aimPitch: 0, jump: false, handL: false, handR: false, fire: false, cycle: false, emote: 0 };
 }

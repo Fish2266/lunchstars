@@ -4,7 +4,11 @@
 export type Action =
   | 'forward' | 'back' | 'left' | 'right' | 'jump'
   | 'handL' | 'handR' | 'fire' | 'cycle'
+  | 'emote1' | 'emote2' | 'emote3' | 'emote4'
   | 'shoveDummy' | 'reset' | 'panel';
+
+/** Emote names, by number (1-based, matching the keys). */
+export const EMOTES = ['Wave', 'Dance', 'Taunt', 'Cheer'];
 
 export const ACTIONS: { action: Action; label: string; group: string }[] = [
   { action: 'forward', label: 'Move forward', group: 'Movement' },
@@ -16,6 +20,10 @@ export const ACTIONS: { action: Action; label: string; group: string }[] = [
   { action: 'handR', label: 'Right hand (tap: punch, hold: grab / hold item)', group: 'Hands' },
   { action: 'fire', label: 'Use active item (shoot / throw grenade)', group: 'Hands' },
   { action: 'cycle', label: 'Switch active hand', group: 'Hands' },
+  { action: 'emote1', label: 'Emote: wave', group: 'Emotes' },
+  { action: 'emote2', label: 'Emote: dance', group: 'Emotes' },
+  { action: 'emote3', label: 'Emote: taunt', group: 'Emotes' },
+  { action: 'emote4', label: 'Emote: cheer', group: 'Emotes' },
   { action: 'shoveDummy', label: 'Shove the dummy', group: 'Debug' },
   { action: 'reset', label: 'Reset the round', group: 'Debug' },
   { action: 'panel', label: 'Toggle tuning panel', group: 'Debug' },
@@ -33,6 +41,10 @@ export const DEFAULT_BINDINGS: Bindings = {
   handR: ['KeyE', null],
   fire: ['Mouse0', null],
   cycle: ['KeyM', null],
+  emote1: ['Digit1', null],
+  emote2: ['Digit2', null],
+  emote3: ['Digit3', null],
+  emote4: ['Digit4', null],
   shoveDummy: ['KeyF', null],
   reset: ['KeyT', null],
   panel: ['Backquote', null],

@@ -4,7 +4,7 @@ import Peer, { type DataConnection } from 'peerjs';
 import { emptyInput, type PlayerInput } from '../sim/input';
 import type { Sim, SimEvent } from '../sim/sim';
 import {
-  binaryType, BUTTONS, decodeInput, diff, FAST_LABEL, makeRoomCode, MAX_PLAYERS, PEER_PREFIX, PROTOCOL_VERSION,
+  binaryType, BUTTONS, decodeInput, EMOTE_PRESS, diff, FAST_LABEL, makeRoomCode, MAX_PLAYERS, PEER_PREFIX, PROTOCOL_VERSION,
   quantizeView, roundEvents, SAME, SnapshotEncoder, type ReliableMsg, type RosterEntry,
 } from './protocol';
 import type { GameView } from '../sim/sim';
@@ -118,6 +118,9 @@ export class NetHost {
     for (const r of this.remotes.values()) {
       const input = { ...r.input };
       BUTTONS.forEach((k, i) => { if (r.pending[i]) { input[k] = true; r.pending[i] = false; } });
+      // An emote shows for one step when a new one was started (the packet carries the last one started).
+      input.emote = r.pending[EMOTE_PRESS] ? r.input.emote : 0;
+      r.pending[EMOTE_PRESS] = false;
       out.push([r.id, input]);
     }
     return out;
@@ -209,7 +212,7 @@ export class NetHost {
     this.playerOf.set(conn, id);
     this.remotes.set(id, {
       id, rel: conn, fast: null, input: emptyInput(), seq: 0,
-      presses: BUTTONS.map(() => 0), pending: BUTTONS.map(() => false), heard: performance.now(), sentView: null,
+      presses: [...BUTTONS.map(() => 0), 0], pending: [...BUTTONS.map(() => false), false], heard: performance.now(), sentView: null,
     });
     this.snapshots.keyframeNext(); // the newcomer has no earlier snapshot to fill resting entities from
     conn.send({ t: 'welcome', v: PROTOCOL_VERSION, you: id, roster: this.roster } satisfies ReliableMsg);

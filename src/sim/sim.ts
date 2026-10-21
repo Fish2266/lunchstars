@@ -73,7 +73,9 @@ export type SimEvent =
   /** A match stopped early: too few players left, or whoever runs the game ended it. Back to practice. */
   | { type: 'matchEnded'; reason: 'players' | 'host' }
   | { type: 'pickup'; player: number; weapon: WeaponKind; pos: V3 }
-  | { type: 'empty'; player: number };
+  | { type: 'empty'; player: number }
+  /** Someone started an emote (1 wave, 2 dance, 3 taunt, 4 cheer). */
+  | { type: 'emote'; player: number; kind: number };
 
 /** Anything with a transform. Rapier bodies already fit; `Virtual` covers non-physical things. */
 interface TransformSource {
@@ -148,6 +150,10 @@ export interface Fighter {
   /** Latest aim, for the "in punch reach" flag in the view. */
   lastAimYaw: number;
   lastAimPitch: number;
+  /** Emote being played (0 = none), how long it has left, and the emote key last tick (edge detection). */
+  emote: number;
+  emoteLeft: number;
+  prevEmote: number;
 }
 
 // ---------------------------------------------------------------- state view (what clients see)
@@ -221,6 +227,8 @@ interface Grenade {
 }
 
 const GRENADE_POOL = 12;
+/** How long each emote plays: wave, dance, taunt, cheer. */
+const EMOTE_SECONDS = [2.2, 3.2, 1.8, 2.2];
 const LOOSE_PER_KIND = 4;
 
 /** A gun lying around (or flying through the air) as a real physics object. */
@@ -321,6 +329,7 @@ export class Sim {
       hands: [makeHand(), makeHand()], active: 1, cooldown: 0, prevFire: false, prevCycle: false,
       hitAccum: 0, hitDir: { x: 0, y: 0, z: 0 }, slot,
       ko: 0, sinceHit: 99, koTimer: 0, koCount: 0, hitsTaken: 0, mashPrev: false, lastAimYaw: 0, lastAimPitch: 0,
+      emote: 0, emoteLeft: 0, prevEmote: 0,
     });
     // Standing on the conveyor carries your planted feet along.
     r.surfaceVelocity = (p) => beltAt(p)?.vel ?? null;
@@ -357,6 +366,7 @@ export class Sim {
     this.giveWeapon(id, null, 1);
     const f = this.fighters.get(id)!;
     f.ko = 0; f.koTimer = 0; f.koCount = 0; f.hitsTaken = 0; f.sinceHit = 99;
+    f.emote = 0; f.emoteLeft = 0;
     r.knockedOut = false;
   }
 
@@ -388,6 +398,7 @@ export class Sim {
       // Knocked out: no control at all. Countdown: look around, but stay put.
       const input = f.koTimer > 0 ? { ...emptyInput(), aimYaw: r.yaw }
         : m.phase === 'countdown' ? { ...emptyInput(), aimYaw: raw.aimYaw, aimPitch: raw.aimPitch } : raw;
+      this.updateEmote(id, r, f, raw, input);
       this.updateHands(id, r, f, input);
       r.step(input, DT);
       this.updateFire(id, r, f, input);
@@ -526,6 +537,25 @@ export class Sim {
     f.koTimer = 0;
     r.knockedOut = false;
     r.setActive(false);
+  }
+
+  /**
+   * Emotes: a new press of an emote key starts one (hands must be free of items). It plays for a few seconds,
+   * or until you use a hand, get knocked silly, or start another. The ragdoll does the moving.
+   */
+  private updateEmote(id: number, r: Ragdoll, f: Fighter, raw: PlayerInput, input: PlayerInput) {
+    const pressed = raw.emote !== 0 && raw.emote !== f.prevEmote;
+    f.prevEmote = raw.emote;
+    const busy = f.koTimer > 0 || r.stiffness < 0.5 || !!f.hands[0].item || !!f.hands[1].item;
+    if (pressed && !busy && this.match.phase !== 'countdown') {
+      f.emote = raw.emote;
+      f.emoteLeft = EMOTE_SECONDS[raw.emote - 1] ?? 2;
+      this.events.push({ type: 'emote', player: id, kind: f.emote });
+    } else if (f.emote) {
+      f.emoteLeft -= DT;
+      if (f.emoteLeft <= 0 || busy || input.handL || input.handR || input.fire) f.emote = 0;
+    }
+    r.emote = f.emote;
   }
 
   /**

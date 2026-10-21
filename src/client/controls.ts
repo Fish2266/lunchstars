@@ -85,6 +85,7 @@ export class Controls {
       handR: this.isDown('handR'),
       fire: this.isDown('fire'),
       cycle: this.isDown('cycle'),
+      emote: this.isDown('emote1') ? 1 : this.isDown('emote2') ? 2 : this.isDown('emote3') ? 3 : this.isDown('emote4') ? 4 : 0,
     };
   }
 

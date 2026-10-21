@@ -580,7 +580,11 @@ export class Ragdoll {
     // Waddle: rock over the stance foot while the other one is in the air.
     let roll = 0;
     for (const leg of this.legs) if (leg.swinging) roll = t.waddle * leg.side * Math.sin(Math.PI * leg.t);
-    const twist = t.hipTwist * stride;
+    // Emote timing (restarts with each new emote); dancing sways the hips and shoulders.
+    if (this.emote !== this.emoteKind) { this.emoteKind = this.emote; this.emoteClock = 0; }
+    if (this.emote) this.emoteClock += dt;
+    if (this.emote === 2) roll += Math.sin(this.emoteClock * 7) * 0.28;
+    const twist = t.hipTwist * stride + (this.emote === 2 ? Math.sin(this.emoteClock * 3.5) * 0.35 : 0);
     this.drive('pelvis', mul(_qYaw, mul(rot(Y_AXIS, twist), mul(rot(X_AXIS, lean * 0.5), rot(Z_AXIS, roll * 0.6)))), k);
     // Bend at the waist when reaching down, so low things are grabbable.
     const reaching = this.armMode[0] === 'reach' || this.armMode[1] === 'reach';
@@ -598,6 +602,16 @@ export class Ragdoll {
     for (let i = 0; i < 2; i++) {
       const [upper, fore, side] = arms[i];
       const mode = this.armMode[i];
+      const pose = mode === 'idle' && this.emote ? this.emotePose(i, side) : null;
+      if (pose) {
+        // Emoting: free arms act it out, held up against gravity like an aiming arm.
+        const ka = k * t.aimGain;
+        this.drive(upper, pose[0], ka, t.armSnap);
+        this.drive(fore, pose[1], ka, t.armSnap);
+        this.holdUp(upper, k, this.chest);
+        this.holdUp(fore, k, this.chest);
+        continue;
+      }
       if (mode === 'idle') {
         // Loose: swing opposite the legs, mostly flopping around with the body.
         // Just after a punch it's held a bit firmer so it comes back down instead of drifting.
@@ -635,6 +649,40 @@ export class Ragdoll {
 
   /** Mid-climb (jump held since a pull-up started from a high grip). */
   private climbing = false;
+
+  /** Set by the sim: emote playing (0 none, 1 wave, 2 dance, 3 taunt, 4 cheer). Free arms act it out. */
+  emote = 0;
+  private emoteKind = 0;
+  private emoteClock = 0;
+
+  /** The arm targets for an emote (world-space quaternions for the upper arm and forearm). */
+  private emotePose(i: number, side: 1 | -1): [Quaternion, Quaternion] | null {
+    const t = this.emoteClock;
+    const right = i === 1;
+    switch (this.emote) {
+      case 1: { // wave: right arm up and out, forearm swinging side to side
+        if (!right) return null;
+        const up = mul(_qYaw, rot(Z_AXIS, 2.5 * side));
+        return [up, mul(up, rot(Z_AXIS, Math.sin(t * 11) * 0.55 * side))];
+      }
+      case 2: { // dance: fists pumping overhead in turn (hips sway too, see step). Elbows only bend forward.
+        const up = 0.5 + 0.5 * Math.sin(t * 7 + (right ? Math.PI : 0));
+        const arm = mul(_qYaw, mul(rot(X_AXIS, -(0.5 + up * 2.4)), rot(Z_AXIS, 0.35 * side)));
+        return [arm, mul(arm, rot(X_AXIS, -(1 - up) * 1.2))];
+      }
+      case 3: { // taunt: "come at me" — arms out front, hands beckoning
+        const beckon = 0.5 + 0.5 * Math.sin(t * 10 + (right ? 0.6 : 0));
+        const fwd = mul(_qYaw, mul(rot(X_AXIS, -1.35), rot(Z_AXIS, 0.08 * side)));
+        return [fwd, mul(fwd, rot(X_AXIS, -(0.3 + beckon * 1.1)))];
+      }
+      case 4: { // cheer: both arms straight up, fists pumping
+        const pump = Math.max(0, Math.sin(t * 9));
+        const up = mul(_qYaw, mul(rot(X_AXIS, -(Math.PI - 0.2)), rot(Z_AXIS, 0.3 * side)));
+        return [up, mul(up, rot(X_AXIS, -pump * 0.9))];
+      }
+    }
+    return null;
+  }
 
   /**
    * Climbing: with jump held, hands gripping the level (a ledge, the pit rim, a platform edge) haul the body up

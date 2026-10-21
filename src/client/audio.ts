@@ -131,6 +131,11 @@ export class Sound {
       case 'furnace':
         if (e.state === 'warn') this.rumble();
         break;
+      case 'emote': {
+        const p = posOf(e.player);
+        if (p) this.emote(p, e.kind);
+        break;
+      }
       case 'countdown':
         break; // the beeps come from countdownBeep(), once per number
       case 'roundStart':

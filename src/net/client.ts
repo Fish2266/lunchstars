@@ -8,7 +8,7 @@ import type { GameView, SimEvent } from '../sim/sim';
 import { openPeer } from './host';
 import { hasTurn } from './ice';
 import {
-  binaryType, BUTTONS, decodeSnapshot, encodeInput, FAST_LABEL, patch, PEER_PREFIX, PROTOCOL_VERSION, snapshotTick,
+  binaryType, BUTTONS, decodeSnapshot, EMOTE_PRESS, encodeInput, FAST_LABEL, patch, PEER_PREFIX, PROTOCOL_VERSION, snapshotTick,
   type ReliableMsg, type RosterEntry, type Snapshot,
 } from './protocol';
 
@@ -33,8 +33,11 @@ export class NetClient {
   private fast: DataConnection | null = null;
   private seq = 0;
   /** Presses per button so far (sent with every input; the host turns increments into taps). */
-  private presses = BUTTONS.map(() => 0);
+  private presses = [...BUTTONS.map(() => 0), 0]; // buttons, then emotes started
   private prevButtons = BUTTONS.map(() => false);
+  private prevEmote = 0;
+  /** The last emote started: sent every packet with its press count, so a lost packet can't lose it. */
+  private lastEmote = 0;
   /** The tick being drawn. Advances at the host's measured tick rate, nudged to keep INTERP_DELAY of buffer. */
   private renderTick: number | null = null;
   private lastInterp = 0;
@@ -162,6 +165,8 @@ export class NetClient {
       if (input[k] && !this.prevButtons[i]) this.presses[i]++;
       this.prevButtons[i] = input[k];
     });
+    if (input.emote && input.emote !== this.prevEmote) { this.presses[EMOTE_PRESS]++; this.lastEmote = input.emote; pressed = true; }
+    this.prevEmote = input.emote;
     const now = performance.now();
     const last = this.lastInput;
     const changed = !last || last.moveX !== input.moveX || last.moveZ !== input.moveZ
@@ -170,7 +175,7 @@ export class NetClient {
     if (!pressed && !(changed && since >= 1000 / 60 - 1) && since < 100) return;
     this.lastInput = { ...input };
     this.lastSent = now;
-    this.fast.send(encodeInput(++this.seq, input, this.presses));
+    this.fast.send(encodeInput(++this.seq, { ...input, emote: this.lastEmote }, this.presses));
   }
 
   /**
