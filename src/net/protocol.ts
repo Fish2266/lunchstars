@@ -11,8 +11,9 @@
 // Bandwidth matters: when two players can't connect directly, every byte goes through a paid TURN relay.
 import type { PlayerInput } from '../sim/input';
 import type { GameView, SimEvent } from '../sim/sim';
+import type { Look } from '../render/cosmetics';
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 /** Peer ids on the public PeerJS broker are `lunchstars-<CODE>` for a room's host. */
 export const PEER_PREFIX = 'lunchstars-';
 export const MAX_PLAYERS = 4;
@@ -27,10 +28,14 @@ export interface RosterEntry {
   left: boolean;
   /** Bots: difficulty (shown in the lobby). */
   level?: 'easy' | 'normal' | 'hard';
+  /** Cosmetics (hat, face, top, bottom). */
+  look?: Look;
 }
 
 export type ReliableMsg =
-  | { t: 'hello'; v: number; name: string }
+  | { t: 'hello'; v: number; name: string; look?: Look }
+  /** A client changed their cosmetics. */
+  | { t: 'look'; look: Look }
   | { t: 'welcome'; v: number; you: number; roster: RosterEntry[] }
   | { t: 'reject'; reason: string }
   | { t: 'roster'; roster: RosterEntry[] }

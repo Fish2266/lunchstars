@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import type { EntityDesc } from '../sim/sim';
 import { surfaceMaterial, worldBox } from './surfaces';
+import { FACES } from './cosmetics';
 
 const mat = (color: number, opts: Partial<THREE.MeshStandardMaterialParameters> = {}) =>
   new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.2, ...opts });
@@ -13,7 +14,6 @@ const WOOD = mat(0x8a4b25, { roughness: 0.7, metalness: 0 });
 const BRASS = mat(0xd9a441, { metalness: 0.8, roughness: 0.3 });
 const OLIVE = mat(0x4d6b32, { roughness: 0.6, metalness: 0.1 });
 const EYE = mat(0x15151a, { roughness: 0.2, metalness: 0 });
-const EYE_SHINE = new THREE.MeshBasicMaterial({ color: 0xffffff });
 /** Shared, so all live grenades blink together (see `animateModels`). */
 export const LIVE_GRENADE = mat(0x4d6b32, { roughness: 0.6, emissive: 0xff2020, emissiveIntensity: 0 });
 
@@ -102,6 +102,8 @@ export interface Face {
   group: THREE.Group;
   /** Swap to knocked-out eyes and show the circling stars. */
   setKnockedOut(on: boolean): void;
+  /** Swap the awake face for another style (see FACES in cosmetics.ts). */
+  setStyle(style: number): void;
   animate(time: number): void;
 }
 
@@ -110,14 +112,8 @@ export function buildFace(r: number): Face {
   const group = new THREE.Group();
   const awake = new THREE.Group();
   const out = new THREE.Group();
+  awake.add(FACES[0].build(r));
   for (const side of [-1, 1]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(r * 0.17, 12, 10), EYE);
-    eye.position.set(side * r * 0.34, r * 0.18, r * 0.9);
-    eye.scale.set(0.85, 1.2, 0.55);
-    awake.add(eye);
-    const shine = new THREE.Mesh(new THREE.SphereGeometry(r * 0.05, 8, 6), EYE_SHINE);
-    shine.position.set(side * r * 0.34 + r * 0.04, r * 0.26, r * 0.99);
-    awake.add(shine);
     // Knocked out: X eyes.
     for (const a of [Math.PI / 4, -Math.PI / 4]) {
       const bar = new THREE.Mesh(new THREE.BoxGeometry(r * 0.36, r * 0.07, r * 0.06), EYE);
@@ -126,10 +122,6 @@ export function buildFace(r: number): Face {
       out.add(bar);
     }
   }
-  const mouth = new THREE.Mesh(new THREE.TorusGeometry(r * 0.18, r * 0.03, 6, 12, Math.PI), EYE);
-  mouth.position.set(0, -r * 0.24, r * 0.94);
-  mouth.rotation.z = Math.PI;
-  awake.add(mouth);
   // Knocked out: a little "o" mouth.
   const o = new THREE.Mesh(new THREE.TorusGeometry(r * 0.09, r * 0.03, 6, 12), EYE);
   o.position.set(0, -r * 0.26, r * 0.95);
@@ -152,6 +144,7 @@ export function buildFace(r: number): Face {
   return {
     group,
     setKnockedOut(on) { awake.visible = !on; out.visible = on; },
+    setStyle(style) { awake.clear(); awake.add((FACES[style] ?? FACES[0]).build(r)); },
     animate(time) {
       if (!out.visible) return;
       // Place the ring above the head in world-up, whatever way the head is facing.

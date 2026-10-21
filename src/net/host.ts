@@ -8,6 +8,7 @@ import {
   quantizeView, roundEvents, SAME, SnapshotEncoder, type ReliableMsg, type RosterEntry,
 } from './protocol';
 import type { GameView } from '../sim/sim';
+import { sanitizeLook, type Look } from '../render/cosmetics';
 import { forceRelay, iceServers } from './ice';
 
 interface Remote {
@@ -83,13 +84,21 @@ export class NetHost {
   }
 
   /** Add a bot (run on the host like any player). Returns its id, or null if the room is full. */
-  addBot(name: string, level: RosterEntry['level'] = 'normal'): number | null {
+  addBot(name: string, level: RosterEntry['level'] = 'normal', look?: Look): number | null {
     if (!this.hasRoom) return null;
     const id = this.nextId++;
     this.sim.addPlayer(id);
-    this.roster.push({ id, name, bot: true, left: false, level });
+    this.roster.push({ id, name, bot: true, left: false, level, look });
     this.broadcastRoster();
     return id;
+  }
+
+  /** Someone's cosmetics changed (the host's own, a bot's, or a client's): tell everyone. */
+  setLook(id: number, look: Look) {
+    const entry = this.roster.find((e) => e.id === id);
+    if (!entry) return;
+    entry.look = sanitizeLook(look);
+    this.broadcastRoster();
   }
 
   /** Change a bot's difficulty (so everyone's lobby shows it). */
@@ -195,7 +204,12 @@ export class NetHost {
   }
 
   private onReliable(conn: DataConnection, msg: ReliableMsg) {
-    if (msg?.t !== 'hello' || this.playerOf.has(conn)) return; // clients only ever say hello, once
+    if (msg?.t === 'look') {
+      const id = this.playerOf.get(conn);
+      if (id !== undefined) this.setLook(id, msg.look);
+      return;
+    }
+    if (msg?.t !== 'hello' || this.playerOf.has(conn)) return; // clients say hello once, then only change looks
     if (msg.v !== PROTOCOL_VERSION) {
       conn.send({ t: 'reject', reason: 'Different game version — refresh both pages.' } satisfies ReliableMsg);
       return;
@@ -208,7 +222,7 @@ export class NetHost {
     const name = String(msg.name || 'Player').slice(0, 16);
     // Order matters: every peer adds players in roster order so entity indices match.
     this.sim.addPlayer(id);
-    this.roster.push({ id, name, bot: false, left: false });
+    this.roster.push({ id, name, bot: false, left: false, look: sanitizeLook(msg.look) });
     this.playerOf.set(conn, id);
     this.remotes.set(id, {
       id, rel: conn, fast: null, input: emptyInput(), seq: 0,

@@ -28,7 +28,8 @@ import { animateModels } from './render/models';
 import { Renderer } from './render/renderer';
 import { INCINERATOR } from './sim/incinerator';
 import type { PlayerInput } from './sim/input';
-import { DT, Sim, type GameView, type SimEvent, type V3 } from './sim/sim';
+import { DT, PLAYER_COLORS, Sim, type GameView, type SimEvent, type V3 } from './sim/sim';
+import { FACES, HATS, PANTS, randomLook, sanitizeLook, TORSOS } from './render/cosmetics';
 import { tuning } from './sim/tuning';
 import { explosive, handling, punch, weapons } from './sim/weapons';
 
@@ -59,7 +60,7 @@ async function main() {
     hideLoading(); // the "Joining…" card takes over from here
     client = new NetClient();
     try {
-      await client.connect(joinCode, 'Player');
+      await client.connect(joinCode, 'Player', sanitizeLook(settings.look));
     } catch (e) {
       menu.showStatus("Couldn't join", (e as Error).message ?? String(e));
       return;
@@ -72,7 +73,7 @@ async function main() {
       for (let i = sim.players.size; i < r.length; i++) sim.addPlayer(r[i].id);
     };
     mirror(client.roster);
-    client.onRoster = (r) => { mirror(r); updateLobby(); };
+    client.onRoster = (r) => { mirror(r); updateLobby(); applyLooks(); };
     client.onClosed = (reason) => menu.showStatus('Disconnected', reason);
   } else {
     sim.addPlayer(0);
@@ -81,7 +82,8 @@ async function main() {
     bot.mode = 'chase + shoot';
     bot.difficulty = settings.botDifficulty;
     bots.set(BOT_ID, bot);
-    roster.push({ id: 0, name: 'Host', bot: false, left: false }, { id: BOT_ID, name: 'Bot', bot: true, left: false, level: bot.difficulty });
+    roster.push({ id: 0, name: 'Host', bot: false, left: false, look: sanitizeLook(settings.look) },
+      { id: BOT_ID, name: 'Bot', bot: true, left: false, level: bot.difficulty, look: randomLook() });
   }
   const firstBot = bots.get(BOT_ID) ?? new Bot(sim, -1, -1);
 
@@ -139,7 +141,7 @@ async function main() {
     await h.open();
     host = h;
     mode = 'host';
-    h.onRosterChange = updateLobby;
+    h.onRosterChange = () => { updateLobby(); applyLooks(); };
     // Mess around in practice until the host starts the match.
     sim.setPractice();
     gore.fadeAll();
@@ -149,7 +151,7 @@ async function main() {
   menu.onEndMatch = () => { sim.endMatch('host'); gore.fadeAll(); updateLobby(); };
   menu.matchRunning = () => sim.match.phase !== 'practice';
   menu.onAddBot = () => {
-    const id = host?.addBot('Bot', settings.botDifficulty);
+    const id = host?.addBot('Bot', settings.botDifficulty, randomLook());
     if (id == null) return;
     const b = new Bot(sim, id, localId);
     b.mode = firstBot.mode === 'idle' ? 'chase + shoot' : firstBot.mode;
@@ -159,6 +161,21 @@ async function main() {
   // ‹ › pickers: 'bot' = the solo / default difficulty, 'bot:<id>' = one bot in a hosted game.
   const step = <T,>(list: readonly T[], cur: T, dir: number) => list[(list.indexOf(cur) + dir + list.length) % list.length];
   menu.onPick = (key, dir) => {
+    // Customize: step one slot (or randomize), save, wear it, and tell everyone.
+    const slots = { head: HATS, face: FACES, torso: TORSOS, pants: PANTS } as const;
+    if (key in slots || key === 'random') {
+      const look = sanitizeLook(settings.look);
+      if (key === 'random') Object.assign(look, randomLook());
+      else { const k = key as keyof typeof slots; look[k] = (look[k] + dir + slots[k].length) % slots[k].length; }
+      settings.look = look;
+      saveSettings();
+      const mine = currentRoster().find((r) => r.id === localId);
+      if (mine) mine.look = look;
+      if (host) host.setLook(localId, look);
+      client?.sendLook(look);
+      applyLooks();
+      return;
+    }
     if (key === 'bot') {
       settings.botDifficulty = step(DIFFICULTIES, settings.botDifficulty, dir);
       saveSettings();
@@ -238,7 +255,17 @@ async function main() {
   }
 
   /** Refresh the raycast lists and lookups after the renderer adds meshes (startup, someone joined). */
+  /** Dress everyone according to the player list (cheap when nothing changed). */
+  function currentRoster(): RosterEntry[] {
+    return host ? host.roster : client ? client.roster : roster;
+  }
+  function applyLooks() {
+    for (const r of currentRoster()) renderer.setLook(r.id, sanitizeLook(r.look));
+  }
+  menu.skinColor = () => PLAYER_COLORS[(sim.fighters.get(localId)?.slot ?? 0) % PLAYER_COLORS.length];
+
   function onSceneBuilt() {
+    applyLooks();
     staticMeshes = renderer.meshes.filter((_, i) => sim.entities[i].role === 'static');
     pickList = renderer.meshes.filter((_, i) => {
       const e = sim.entities[i];

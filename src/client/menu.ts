@@ -2,6 +2,8 @@
 import { ACTIONS, bind, codeName, DEFAULT_BINDINGS, saveSettings, settings, type Action } from './bindings';
 import type { Controls } from './controls';
 import { DEBUG } from './debug';
+import { WardrobePreview } from './wardrobe';
+import { FACES, HATS, PANTS, sanitizeLook, TORSOS } from '../render/cosmetics';
 import { slotColor, slotName } from './matchHud';
 import type { RosterEntry } from '../net/protocol';
 
@@ -47,6 +49,11 @@ const CSS = `
 #menu .pick.compact b { min-width: 64px; font-size: 13px; }
 #menu .pick.compact .arrow { width: 26px; height: 26px; font-size: 16px; }
 #menu .lvl { font-size: 13px; opacity: 0.8; }
+#menu .wardrobe-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; justify-content: center; }
+#menu .wardrobe-view { width: 220px; height: 300px; border-radius: 14px; background: radial-gradient(circle at 50% 35%, #3a4380, #1a1e38); overflow: hidden; flex: none; }
+#menu .wardrobe-canvas { display: block; cursor: grab; touch-action: none; }
+#menu .wardrobe-picks { flex: 1; min-width: 240px; }
+#menu .wardrobe-picks .pick b { min-width: 130px; }
 `;
 
 /** A "label  ‹ value ›" row; clicks reach `Menu.onPick(key, ±1)`. */
@@ -81,7 +88,10 @@ export interface Lobby {
 export class Menu {
   private root: HTMLDivElement;
   private listening: { action: Action; slot: 0 | 1; el: HTMLButtonElement } | null = null;
-  private screen: 'pause' | 'settings' | 'status' = 'pause';
+  private screen: 'pause' | 'settings' | 'status' | 'wardrobe' = 'pause';
+  private preview: WardrobePreview | null = null;
+  /** Your player colour, for the Customize preview. */
+  skinColor: () => number = () => 0xff5a5f;
   /** True once the player has clicked "Play" at least once (pointer lock may be unavailable). */
   playing = false;
   mode: MenuMode = 'title';
@@ -150,6 +160,7 @@ export class Menu {
           <h1>LUNCH STARS</h1>
           <button class="big" data-solo>Play solo</button>
           ${picker('Bot difficulty', label(settings.botDifficulty), 'bot')}
+          <button class="plain" data-wardrobe>Customize character</button>
           <h2>Online</h2>
           <button class="plain" data-host>Host a game</button>
           <div class="join"><input data-code maxlength="4" placeholder="CODE" value="${escapeHtml(code)}" spellcheck="false" autocomplete="off">
@@ -180,6 +191,7 @@ export class Menu {
           ${picker('Bot difficulty', label(settings.botDifficulty), 'bot')}
           <button class="plain" data-quit>Quit to title screen</button>
           <h2>More</h2>
+          <button class="plain" data-wardrobe>Customize character</button>
           <button class="plain" data-host>Host this as an online game</button>
           ${settingsBtn}
           <div class="error" data-error></div>
@@ -213,6 +225,7 @@ export class Menu {
             : `<button class="big" data-start>${l?.matchRunning ? 'Restart match' : 'Start match'}</button>`) : ''}
           ${isHost && l?.matchRunning ? `<button class="plain" data-end>End match (back to free play)</button>` : ''}
           <button class="${isHost ? 'plain' : 'big'}" data-play>${this.playing ? 'Resume' : isHost ? 'Practice while people join' : 'Play'}</button>
+          <button class="plain" data-wardrobe>Customize character</button>
           ${settingsBtn}
           <button class="plain" data-leave>${isHost ? 'Close room' : 'Leave game'}</button>
           <div class="hint">${isHost ? 'The game keeps running while this menu is open.' : 'The host starts the match. The game keeps running while this menu is open.'}</div>
@@ -226,6 +239,37 @@ export class Menu {
       for (const el of this.root.querySelectorAll<HTMLButtonElement>('[data-kick]')) el.onclick = () => this.onRemoveBot(Number(el.dataset.kick));
     }
     this.on('[data-settings]', () => this.showSettings());
+    this.on('[data-wardrobe]', () => this.showWardrobe());
+    this.wirePickers();
+  }
+
+  /** Customize: a turning preview of your character, with ‹ › arrows for each slot. */
+  showWardrobe() {
+    this.openCard();
+    this.screen = 'wardrobe';
+    const l = sanitizeLook(settings.look);
+    this.root.innerHTML = `
+      <div class="card wardrobe">
+        <h1>Customize</h1>
+        <div class="wardrobe-row">
+          <div class="wardrobe-view" data-view></div>
+          <div class="wardrobe-picks">
+            ${picker('Head', HATS[l.head].name, 'head')}
+            ${picker('Face', FACES[l.face].name, 'face')}
+            ${picker('Torso', TORSOS[l.torso].name, 'torso')}
+            ${picker('Pants', PANTS[l.pants].name, 'pants')}
+            <button class="plain" data-random>Randomize</button>
+            <div class="hint">Drag the character to turn it. Your colour comes from your player slot.</div>
+          </div>
+        </div>
+        <button class="big" data-back>Done</button>
+      </div>`;
+    this.preview ??= new WardrobePreview(220, 300);
+    this.root.querySelector('[data-view]')!.appendChild(this.preview.canvas);
+    this.preview.dress(this.skinColor(), l);
+    this.preview.start();
+    this.on('[data-random]', () => { this.onPick('random', 0); this.showWardrobe(); });
+    this.on('[data-back]', () => { this.preview?.stop(); this.showPause(); });
     this.wirePickers();
   }
 
@@ -239,6 +283,7 @@ export class Menu {
   /** Re-draw whatever screen is showing so pickers show their new values. */
   private refreshPickers() {
     if (this.screen === 'pause') this.showPause();
+    else if (this.screen === 'wardrobe') this.showWardrobe();
   }
 
   /** Re-draw the lobby card if it's showing (someone joined or left). */
@@ -278,6 +323,7 @@ export class Menu {
   }
 
   play() {
+    this.preview?.stop();
     this.playing = true;
     this.root.classList.add('hidden');
     this.controls.suspended = false;

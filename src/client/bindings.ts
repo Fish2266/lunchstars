@@ -63,6 +63,8 @@ export const settings = {
   botDifficulty: 'normal' as 'easy' | 'normal' | 'hard',
   /** Master sound volume, 0..1. */
   volume: 0.7,
+  /** Your character's cosmetics (indices into the lists in render/cosmetics.ts). */
+  look: { head: 0, face: 0, torso: 1, pants: 1 },
 };
 
 export function loadSettings() {
@@ -78,6 +80,7 @@ export function loadSettings() {
     if (typeof saved.showControls === 'boolean') settings.showControls = saved.showControls;
     if (['easy', 'normal', 'hard'].includes(saved.botDifficulty)) settings.botDifficulty = saved.botDifficulty;
     if (typeof saved.volume === 'number') settings.volume = Math.max(0, Math.min(1, saved.volume));
+    if (saved.look && typeof saved.look === 'object') settings.look = { ...settings.look, ...saved.look };
   } catch { /* ignore */ }
 }
 

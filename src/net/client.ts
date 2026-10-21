@@ -5,6 +5,7 @@ import type Peer from 'peerjs';
 import type { DataConnection } from 'peerjs';
 import { emptyInput, type PlayerInput } from '../sim/input';
 import type { GameView, SimEvent } from '../sim/sim';
+import type { Look } from '../render/cosmetics';
 import { openPeer } from './host';
 import { hasTurn } from './ice';
 import {
@@ -53,10 +54,10 @@ export class NetClient {
   closed = false;
 
   /** Connect to a room; resolves once both channels are open. */
-  async connect(code: string, name: string): Promise<void> {
+  async connect(code: string, name: string, look?: Look): Promise<void> {
     try {
       this.peer = await openPeer();
-      await this.handshake(PEER_PREFIX + code.toUpperCase(), name);
+      await this.handshake(PEER_PREFIX + code.toUpperCase(), name, look);
     } catch (e) {
       this.closed = true;
       this.peer?.destroy();
@@ -72,14 +73,14 @@ export class NetClient {
     }, 250);
   }
 
-  private async handshake(hostId: string, name: string) {
+  private async handshake(hostId: string, name: string, look?: Look) {
     const peer = this.peer!;
     const rel = peer.connect(hostId, { label: 'rel', serialization: 'json', reliable: true });
     this.rel = rel;
     let opened = false;
     await withTimeout(new Promise<void>((resolve, reject) => {
       peer.on('error', (e) => reject(e.type === 'peer-unavailable' ? new Error('No room with that code (check it, and that the host still has the game open).') : e));
-      rel.on('open', () => { opened = true; rel.send({ t: 'hello', v: PROTOCOL_VERSION, name } satisfies ReliableMsg); });
+      rel.on('open', () => { opened = true; rel.send({ t: 'hello', v: PROTOCOL_VERSION, name, look } satisfies ReliableMsg); });
       rel.on('data', (d) => {
         const msg = d as ReliableMsg;
         if (msg.t === 'welcome') { this.you = msg.you; this.setRoster(msg.roster); resolve(); }
@@ -141,6 +142,11 @@ export class NetClient {
     const at = this.renderTick ?? Infinity;
     while (this.views.length && this.views[0].tick <= at) this.shownView = this.views.shift()!;
     return this.shownView ?? null;
+  }
+
+  /** Tell the host we changed our cosmetics. */
+  sendLook(look: Look) {
+    if (this.rel?.open) this.rel.send({ t: 'look', look } satisfies ReliableMsg);
   }
 
   /** Events whose time has come (playback reached the tick they happened by). */

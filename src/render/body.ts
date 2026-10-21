@@ -201,8 +201,9 @@ export function bodyGeometry() {
  * Make one character: a skinned mesh driven by the given bones (one per physics part, in PARTS order).
  * The bones are the objects the renderer moves to the physics transforms each frame.
  */
-export function buildBody(bones: THREE.Bone[], material: THREE.Material): THREE.SkinnedMesh {
-  const { geometry, shapes } = bodyGeometry();
+export function buildBody(bones: THREE.Bone[], material: THREE.Material, geo?: THREE.BufferGeometry): THREE.SkinnedMesh {
+  const { geometry: shared, shapes } = bodyGeometry();
+  const geometry = geo ?? shared;
   const inverses = shapes.map((s) => s.inv.clone());
   const skeleton = new THREE.Skeleton(bones, inverses);
   const mesh = new THREE.SkinnedMesh(geometry, material);

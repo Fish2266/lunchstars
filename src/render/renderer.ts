@@ -3,7 +3,8 @@
 import * as THREE from 'three';
 import type { EntityDesc, ShapeDesc } from '../sim/sim';
 import { buildBody } from './body';
-import { buildFace, buildModel, gummy, type Face } from './models';
+import { buildFace, buildModel, type Face } from './models';
+import { animateHat, buildHat, gummyBodyMaterial, paintBody, playerGeometry, type Look } from './cosmetics';
 import { surfaceMaterial, worldBox } from './surfaces';
 
 export class Renderer {
@@ -13,7 +14,9 @@ export class Renderer {
   /** One mesh per sim entity, same order as `sim.entities`. */
   meshes: THREE.Object3D[] = [];
   private faces = new Map<number, Face>();
-  private bodies = new Map<number, THREE.Object3D>();
+  private bodies = new Map<number, THREE.SkinnedMesh>();
+  /** Per player: skin colour, head bone (hats go on it), current hat and the look last applied. */
+  private players = new Map<number, { skin: number; head: THREE.Bone | null; hat: THREE.Object3D | null; look: string }>();
   /** Each player's bones in PARTS order (parents before children), for the twist clamp. */
   private skeletons: THREE.Bone[][] = [];
 
@@ -23,6 +26,8 @@ export class Renderer {
     if (b) b.visible = !hidden;
     const f = this.faces.get(playerId);
     if (f) f.group.visible = !hidden;
+    const hat = this.players.get(playerId)?.hat;
+    if (hat) hat.visible = !hidden;
   }
   private furnaceLight: THREE.PointLight;
   private furnaceState: 'idle' | 'warn' | 'burst' = 'idle';
@@ -134,6 +139,7 @@ export class Renderer {
           const face = buildFace(0.195);
           bone.add(face.group);
           this.faces.set(e.playerId, face);
+          this.players.set(e.playerId, { skin: e.color, head: bone, hat: null, look: '' });
         }
         let entry = bonesByPlayer.get(e.playerId);
         if (!entry) { entry = { bones: [], color: e.color }; bonesByPlayer.set(e.playerId, entry); }
@@ -154,7 +160,9 @@ export class Renderer {
       this.meshes.push(obj);
     }
     for (const [pid, { bones, color }] of bonesByPlayer) {
-      const body = buildBody(bones, gummy(color));
+      const geo = playerGeometry();
+      paintBody(geo, color, { head: 0, face: 0, torso: 0, pants: 0 });
+      const body = buildBody(bones, gummyBodyMaterial(), geo);
       this.scene.add(body);
       this.bodies.set(pid, body);
       this.skeletons.push(bones);
@@ -182,6 +190,20 @@ export class Renderer {
     this.sun.target.updateMatrixWorld();
   }
 
+  /** Dress a player: paint their top and bottom onto the body, swap face style and hat. */
+  setLook(playerId: number, look: Look) {
+    const p = this.players.get(playerId);
+    const body = this.bodies.get(playerId);
+    const key = JSON.stringify(look);
+    if (!p || !body || p.look === key) return;
+    p.look = key;
+    paintBody(body.geometry, p.skin, look);
+    this.faces.get(playerId)?.setStyle(look.face);
+    if (p.hat) { p.head?.remove(p.hat); p.hat = null; }
+    p.hat = buildHat(look.head, 0.195);
+    if (p.hat && p.head) p.head.add(p.hat);
+  }
+
   setKnockedOut(playerId: number, on: boolean) {
     this.faces.get(playerId)?.setKnockedOut(on);
   }
@@ -196,6 +218,7 @@ export class Renderer {
       b.mat.emissiveIntensity = on ? 4 : 0.2;
     }
     for (const f of this.faces.values()) f.animate(t);
+    for (const p of this.players.values()) animateHat(p.hat, t);
     this.gl.render(this.scene, this.camera);
   }
 }
